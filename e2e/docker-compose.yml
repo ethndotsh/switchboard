@@ -37,6 +37,8 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        SWITCHBOARD_REPLACE: /src
     depends_on:
       minio-init:
         condition: service_completed_successfully

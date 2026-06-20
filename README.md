@@ -19,6 +19,12 @@ Rule deployments do not restart the proxy. Bundles are downloaded, verified, com
 
 ## Install
 
+Run the Caddy image with Switchboard already built in:
+
+```sh
+docker pull ghcr.io/ethndotsh/switchboard-caddy:latest
+```
+
 Install the CLI onto your `PATH`:
 
 ```sh
@@ -243,7 +249,25 @@ Each route gets one atomic active bundle. Namespace groups channels; channel rem
 
 ## Caddy
 
-Build with `xcaddy` from this module:
+Use the published Caddy image:
+
+```sh
+docker run --rm -p 8080:8080 \
+	-v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
+	-e SWITCHBOARD_S3_ENDPOINT \
+	-e SWITCHBOARD_S3_ACCESS_KEY \
+	-e SWITCHBOARD_S3_SECRET_KEY \
+	-e SWITCHBOARD_S3_BUCKET \
+	ghcr.io/ethndotsh/switchboard-caddy:latest
+```
+
+Build with `xcaddy`:
+
+```sh
+xcaddy build --with github.com/ethndotsh/switchboard/caddy@latest
+```
+
+For local development from this repository:
 
 ```sh
 xcaddy build --with github.com/ethndotsh/switchboard/caddy=./caddy
@@ -271,6 +295,35 @@ Caddyfile:
 The handler never downloads, compiles, or instantiates bundles on the request path. A background reconciler polls `channels/{channel}.json`, downloads immutable bundles, verifies checksums, compiles Wasm, warms the configured guest pool, validates the candidate, and atomically swaps the active runtime.
 
 If the warmed pool is exhausted on the request path, Switchboard treats the rule as unavailable and applies `fail_mode`.
+
+## Docker
+
+Published images are available at:
+
+```text
+ghcr.io/ethndotsh/switchboard-caddy:latest
+ghcr.io/ethndotsh/switchboard-caddy:v0.1.0
+ghcr.io/ethndotsh/switchboard-caddy:sha-<commit>
+```
+
+Build a Caddy image with the Switchboard module from a checkout:
+
+```sh
+docker build -t switchboard-caddy .
+```
+
+Pin the public Go module version by overriding `SWITCHBOARD_VERSION`:
+
+```sh
+docker build \
+	--build-arg SWITCHBOARD_REPLACE= \
+	--build-arg SWITCHBOARD_VERSION=latest \
+	-t switchboard-caddy .
+```
+
+The default Docker build uses the checkout copied into the image build context. The pinned public-module mode clears `SWITCHBOARD_REPLACE`, then resolves `github.com/ethndotsh/switchboard` through Go modules.
+
+GitHub Actions publishes the Caddy image from the checked-out source commit on pushes to the default branch and version tags. Pull requests build the image without publishing it.
 
 ## Performance Notes
 
