@@ -7,27 +7,16 @@ import (
 	"time"
 
 	"github.com/ethndotsh/switchboard"
+	"github.com/ethndotsh/switchboard/engine/wasmapi"
 	"github.com/ethndotsh/switchboard/internal/bundle"
-	"github.com/goccy/go-json"
 	"go.uber.org/zap"
 )
 
 const DefaultPoolSize = 16
 
-type WasmRuntime interface {
-	Compile(ctx context.Context, module []byte) (CompiledRule, error)
-	Close(ctx context.Context) error
-}
-
-type CompiledRule interface {
-	Instantiate(ctx context.Context) (RuleInstance, error)
-	Close(ctx context.Context) error
-}
-
-type RuleInstance interface {
-	Invoke(ctx context.Context, entrypoint string, requestData []byte, timeout time.Duration) ([]byte, error)
-	Close(ctx context.Context) error
-}
+type WasmRuntime = wasmapi.WasmRuntime
+type CompiledRule = wasmapi.CompiledRule
+type RuleInstance = wasmapi.RuleInstance
 
 type Runtime struct {
 	id          string
@@ -160,11 +149,6 @@ func (r *Runtime) Validate(ctx context.Context) error {
 }
 
 func (r *Runtime) Invoke(ctx context.Context, req switchboard.Request) (switchboard.Action, error) {
-	reqData, err := json.Marshal(req)
-	if err != nil {
-		return switchboard.Action{}, err
-	}
-
 	mod, err := r.acquireModule(ctx)
 	if err != nil {
 		return switchboard.Action{}, err
@@ -174,18 +158,11 @@ func (r *Runtime) Invoke(ctx context.Context, req switchboard.Request) (switchbo
 		r.releaseModule(context.Background(), mod, healthy)
 	}()
 
-	actionData, err := mod.Invoke(ctx, r.manifest.Entrypoint, reqData, r.timeout)
+	action, err := mod.Invoke(ctx, r.manifest.Entrypoint, req, r.timeout)
 	if err != nil {
 		return switchboard.Action{}, err
 	}
 	healthy = true
-	if len(actionData) == 0 {
-		return switchboard.Action{Type: switchboard.ActionNext}, nil
-	}
-	var action switchboard.Action
-	if err := json.Unmarshal(actionData, &action); err != nil {
-		return switchboard.Action{}, err
-	}
 	if action.Type == "" {
 		action.Type = switchboard.ActionNext
 	}

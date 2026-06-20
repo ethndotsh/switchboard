@@ -43,13 +43,19 @@ func BenchmarkRequestFromHTTP(b *testing.B) {
 	}
 }
 
-func TestApplyActionNextAndHeaders(t *testing.T) {
+func TestApplyActionNextAndHeaderOps(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("x-delete", "gone")
 	res := httptest.NewRecorder()
 
 	next, err := ApplyAction(res, req, switchboard.Action{
-		Type:    switchboard.ActionNext,
-		Headers: map[string]string{"x-switchboard-rule": "test"},
+		Type: switchboard.ActionNext,
+		HeaderOps: []switchboard.HeaderOp{
+			{Op: switchboard.HeaderOpSet, Name: "x-switchboard-rule", Value: "test"},
+			{Op: switchboard.HeaderOpAdd, Name: "x-list", Value: "a"},
+			{Op: switchboard.HeaderOpAdd, Name: "x-list", Value: "b"},
+			{Op: switchboard.HeaderOpDelete, Name: "x-delete"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -59,6 +65,12 @@ func TestApplyActionNextAndHeaders(t *testing.T) {
 	}
 	if req.Header.Get("x-switchboard-rule") != "test" {
 		t.Fatalf("header = %q", req.Header.Get("x-switchboard-rule"))
+	}
+	if got := req.Header.Values("x-list"); len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("x-list = %#v", got)
+	}
+	if req.Header.Get("x-delete") != "" {
+		t.Fatalf("x-delete = %q", req.Header.Get("x-delete"))
 	}
 }
 

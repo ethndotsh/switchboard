@@ -32,8 +32,26 @@ func TestRuntimeInvokesBuiltBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if next.Type != switchboard.ActionNext || next.Headers["x-switchboard-rule"] != "basic" {
+	if next.Type != switchboard.ActionNext || !hasHeaderOp(next, switchboard.HeaderOpSet, "x-switchboard-rule", "basic") {
 		t.Fatalf("next action = %#v", next)
+	}
+
+	headerDeny, err := runtime.Invoke(ctx, switchboard.Request{Path: "/", Method: "GET", Headers: map[string][]string{"x-switchboard-deny": {"yes"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if headerDeny.Type != switchboard.ActionDeny || headerDeny.StatusCode != 418 {
+		t.Fatalf("header deny action = %#v", headerDeny)
+	}
+
+	headerOps, err := runtime.Invoke(ctx, switchboard.Request{Path: "/headers", Method: "GET", Headers: map[string][]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasHeaderOp(headerOps, switchboard.HeaderOpAdd, "x-switchboard-list", "one") ||
+		!hasHeaderOp(headerOps, switchboard.HeaderOpAdd, "x-switchboard-list", "two") ||
+		!hasHeaderOp(headerOps, switchboard.HeaderOpDelete, "x-switchboard-delete", "") {
+		t.Fatalf("header ops action = %#v", headerOps)
 	}
 }
 
@@ -51,6 +69,15 @@ func TestRuntimePoolExhaustion(t *testing.T) {
 	if err != ErrRuntimePoolExhausted {
 		t.Fatalf("expected pool exhaustion, got %v", err)
 	}
+}
+
+func hasHeaderOp(action switchboard.Action, op switchboard.HeaderOpType, name string, value string) bool {
+	for _, headerOp := range action.HeaderOps {
+		if headerOp.Op == op && headerOp.Name == name && headerOp.Value == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRuntimeAutoscaleIncreasesAfterExhaustion(t *testing.T) {

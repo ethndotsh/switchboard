@@ -665,12 +665,11 @@ func exampleRuleSource(packageName string) string {
 import "github.com/ethndotsh/switchboard/sdk"
 
 func Handle(req sdk.Request) sdk.Action {
-	if req.Path == "/blocked" {
+	if req.Path() == "/blocked" {
 		return sdk.Deny(403)
 	}
 
-	req.Headers["x-powered-by"] = []string{"switchboard"}
-	return sdk.Next(req)
+	return sdk.Next().SetHeader("x-powered-by", "switchboard")
 }
 `, packageName)
 }

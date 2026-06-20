@@ -6,14 +6,23 @@ import (
 )
 
 func Handle(req sdk.Request) sdk.Action {
-	if req.Path == "/blocked" {
+	if req.Path() == "/blocked" {
 		return sdk.Deny(403)
 	}
-	if req.Path == "/old" {
+	if req.Path() == "/old" {
 		return sdk.Redirect(302, "/new")
 	}
-	req.Headers["x-switchboard-rule"] = []string{"basic"}
-	return sdk.Next(req)
+	if req.Header("x-switchboard-deny") == "yes" {
+		return sdk.Deny(418)
+	}
+	if req.Path() == "/headers" {
+		return sdk.Next().
+			SetHeader("x-switchboard-rule", "basic").
+			AddHeader("x-switchboard-list", "one").
+			AddHeader("x-switchboard-list", "two").
+			DeleteHeader("x-switchboard-delete")
+	}
+	return sdk.Next().SetHeader("x-switchboard-rule", "basic")
 }
 
 //export handle

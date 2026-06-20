@@ -170,6 +170,34 @@ func BenchmarkRuntimeInvokeWarmPoolWithHeaders(b *testing.B) {
 	}
 }
 
+func BenchmarkRuntimeInvokeHeaderReadWarmPool(b *testing.B) {
+	runtime, ctx, cleanup := loadBenchmarkRuntime(b, 1)
+	defer cleanup()
+
+	req := switchboard.Request{Path: "/", Method: "GET", Headers: map[string][]string{"x-switchboard-deny": {"yes"}}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := runtime.Invoke(ctx, req); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkRuntimeInvokeHeaderOpsWarmPool(b *testing.B) {
+	runtime, ctx, cleanup := loadBenchmarkRuntime(b, 1)
+	defer cleanup()
+
+	req := switchboard.Request{Path: "/headers", Method: "GET", Headers: map[string][]string{}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := runtime.Invoke(ctx, req); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkRuntimeInvokeAdaptiveSteadyState(b *testing.B) {
 	runtime, ctx, cleanup := loadBenchmarkRuntimeWithPoolConfig(b, PoolConfig{MinSize: 1, MaxSize: 4, Autoscale: true})
 	defer cleanup()

@@ -141,7 +141,7 @@ func TestInitGeneratesPlainRulePackage(t *testing.T) {
 	if strings.Contains(text, "//export handle") || strings.Contains(text, "func main()") || strings.Contains(text, "abi/guest") {
 		t.Fatalf("init rule should not expose wasm wrapper details:\n%s", text)
 	}
-	if !strings.Contains(text, `req.Headers["x-powered-by"] = []string{"switchboard"}`) {
+	if !strings.Contains(text, `return sdk.Next().SetHeader("x-powered-by", "switchboard")`) {
 		t.Fatalf("init rule should set x-powered-by:\n%s", text)
 	}
 }

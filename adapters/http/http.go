@@ -16,7 +16,7 @@ func RequestFromHTTP(r *http.Request) switchboard.Request {
 }
 
 func ApplyAction(w http.ResponseWriter, r *http.Request, action switchboard.Action) (bool, error) {
-	ApplyRequestHeaders(r, action.Headers)
+	ApplyHeaderOps(r, action.HeaderOps)
 	switch action.Type {
 	case "", switchboard.ActionNext:
 		return true, nil
@@ -45,8 +45,15 @@ func ApplyAction(w http.ResponseWriter, r *http.Request, action switchboard.Acti
 	}
 }
 
-func ApplyRequestHeaders(r *http.Request, headers map[string]string) {
-	for key, value := range headers {
-		r.Header.Set(key, value)
+func ApplyHeaderOps(r *http.Request, ops []switchboard.HeaderOp) {
+	for _, op := range ops {
+		switch op.Op {
+		case switchboard.HeaderOpSet:
+			r.Header.Set(op.Name, op.Value)
+		case switchboard.HeaderOpAdd:
+			r.Header.Add(op.Name, op.Value)
+		case switchboard.HeaderOpDelete:
+			r.Header.Del(op.Name)
+		}
 	}
 }
