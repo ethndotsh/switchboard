@@ -94,7 +94,13 @@ func TestApplyActionRedirect(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	res := httptest.NewRecorder()
 
-	next, err := ApplyAction(res, req, switchboard.Action{Type: switchboard.ActionRedirect, Location: "/new"})
+	next, err := ApplyAction(res, req, switchboard.Action{
+		Type:     switchboard.ActionRedirect,
+		Location: "/new",
+		HeaderOps: []switchboard.HeaderOp{
+			{Op: switchboard.HeaderOpSet, Name: "x-powered-by", Value: "switchboard"},
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,6 +112,9 @@ func TestApplyActionRedirect(t *testing.T) {
 	}
 	if res.Header().Get("Location") != "/new" {
 		t.Fatalf("location = %q", res.Header().Get("Location"))
+	}
+	if res.Header().Get("x-powered-by") != "switchboard" {
+		t.Fatalf("x-powered-by = %q", res.Header().Get("x-powered-by"))
 	}
 }
 

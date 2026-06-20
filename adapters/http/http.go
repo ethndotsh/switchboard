@@ -16,11 +16,12 @@ func RequestFromHTTP(r *http.Request) switchboard.Request {
 }
 
 func ApplyAction(w http.ResponseWriter, r *http.Request, action switchboard.Action) (bool, error) {
-	ApplyHeaderOps(r, action.HeaderOps)
 	switch action.Type {
 	case "", switchboard.ActionNext:
+		ApplyHeaderOps(r, action.HeaderOps)
 		return true, nil
 	case switchboard.ActionDeny:
+		ApplyResponseHeaderOps(w.Header(), action.HeaderOps)
 		status := action.StatusCode
 		if status == 0 {
 			status = http.StatusForbidden
@@ -28,6 +29,7 @@ func ApplyAction(w http.ResponseWriter, r *http.Request, action switchboard.Acti
 		w.WriteHeader(status)
 		return false, nil
 	case switchboard.ActionRedirect:
+		ApplyResponseHeaderOps(w.Header(), action.HeaderOps)
 		status := action.StatusCode
 		if status == 0 {
 			status = http.StatusFound
@@ -35,6 +37,7 @@ func ApplyAction(w http.ResponseWriter, r *http.Request, action switchboard.Acti
 		http.Redirect(w, r, action.Location, status)
 		return false, nil
 	case switchboard.ActionRewrite:
+		ApplyHeaderOps(r, action.HeaderOps)
 		if action.RewritePath != "" {
 			r.URL.Path = action.RewritePath
 			r.RequestURI = r.URL.RequestURI()
@@ -46,14 +49,22 @@ func ApplyAction(w http.ResponseWriter, r *http.Request, action switchboard.Acti
 }
 
 func ApplyHeaderOps(r *http.Request, ops []switchboard.HeaderOp) {
+	applyHeaderOps(r.Header, ops)
+}
+
+func ApplyResponseHeaderOps(h http.Header, ops []switchboard.HeaderOp) {
+	applyHeaderOps(h, ops)
+}
+
+func applyHeaderOps(h http.Header, ops []switchboard.HeaderOp) {
 	for _, op := range ops {
 		switch op.Op {
 		case switchboard.HeaderOpSet:
-			r.Header.Set(op.Name, op.Value)
+			h.Set(op.Name, op.Value)
 		case switchboard.HeaderOpAdd:
-			r.Header.Add(op.Name, op.Value)
+			h.Add(op.Name, op.Value)
 		case switchboard.HeaderOpDelete:
-			r.Header.Del(op.Name)
+			h.Del(op.Name)
 		}
 	}
 }
