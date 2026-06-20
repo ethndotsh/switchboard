@@ -358,14 +358,6 @@ The hot path does not download, compile, or instantiate Wasm. The remaining cost
 
 Docker e2e HTTP numbers are useful only as a directional smoke test. Sequential local pass-through landed in the same millisecond range as stock Caddy proxying to the same Python backend, but production latency depends on host, pool sizing, traffic shape, rule complexity, TinyGo flags, and memory pressure.
 
-## ABI Direction
-
-The current manifest ABI is `switchboard/v0`: the host passes a full JSON request to the guest, and the guest returns a JSON action.
-
-The planned `switchboard/v1` ABI keeps the full JSON request for compatibility, but changes the result to a patch action. A pass-through rule can return "next" without echoing headers, and a rule that sets one header returns one header operation.
-
-The planned `switchboard/v2` ABI moves request reads behind lazy host accessors and writes actions through host calls. A rule that only checks `Path` does not need the full request JSON, and a rule that sets one header does not need to serialize an action object.
-
 ## Prior Art
 
 Switchboard borrows architectural lessons from Railway's Hikari CDN writeup: keep the host dataplane stable, move request policy into versioned guests, reconcile toward desired state, validate candidates off-path, and activate with an atomic swap. See [Railway's Hikari CDN architecture](https://blog.railway.com/p/railway-cdn).
