@@ -317,7 +317,7 @@ Published images are available at:
 
 ```text
 ghcr.io/ethndotsh/switchboard-caddy:latest
-ghcr.io/ethndotsh/switchboard-caddy:v0.0.1
+ghcr.io/ethndotsh/switchboard-caddy:v0.0.2
 ghcr.io/ethndotsh/switchboard-caddy:sha-<commit>
 ```
 
@@ -344,7 +344,27 @@ GitHub Actions publishes the Caddy image from the checked-out source commit on p
 
 Switchboard optimizes for predictable request-path behavior rather than zero-cost rule execution. Bundles are reconciled, compiled, warmed, and validated off-path; request handling borrows an already-warmed Wasm instance from the active runtime pool.
 
-Local benchmarks on an Apple M4 Pro with CLI-built optimized artifacts show warmed simple block rules around 6.9 us/op in-process. Header-rich rules that return mutated headers are more expensive because both the host and TinyGo guest encode/decode more JSON; optimized local runs are around 29-30 us/op. The HTTP adapter passes request headers into the engine without copying, so request conversion itself is zero-allocation. In the Docker e2e workspace, sequential local HTTP pass-through was in the same millisecond range as stock Caddy reverse proxying to the same Python backend. These numbers are directional, not production guarantees; real latency depends on host, pool sizing, traffic shape, rule complexity, TinyGo flags, and memory pressure.
+Local in-process benchmarks on an Apple M4 Pro with CLI-built optimized artifacts:
+
+| Path | Approximate Result | What It Measures |
+| --- | ---: | --- |
+| HTTP request conversion | 0 allocs/op | Adapter conversion into a Switchboard request |
+| Warm simple block rule | 6.9 us/op | Borrow pooled instance, invoke rule, decode deny action |
+| Warm header-mutating rule | 29-30 us/op | Current JSON request/action path with multiple headers |
+
+The hot path does not download, compile, or instantiate Wasm. The remaining cost is mostly rule execution plus ABI serialization. Header-heavy rules are slower today because `switchboard/v0` sends the full request as JSON and returns a JSON action. The next ABI iterations are aimed at making "continue unchanged" and "set one header" proportional to the actual change instead of the full header set.
+
+`wasm-opt` is optional because local testing showed it mainly reduced bundle size. It did not materially change warmed request latency.
+
+Docker e2e HTTP numbers are useful only as a directional smoke test. Sequential local pass-through landed in the same millisecond range as stock Caddy proxying to the same Python backend, but production latency depends on host, pool sizing, traffic shape, rule complexity, TinyGo flags, and memory pressure.
+
+## ABI Direction
+
+The current manifest ABI is `switchboard/v0`: the host passes a full JSON request to the guest, and the guest returns a JSON action.
+
+The planned `switchboard/v1` ABI keeps the full JSON request for compatibility, but changes the result to a patch action. A pass-through rule can return "next" without echoing headers, and a rule that sets one header returns one header operation.
+
+The planned `switchboard/v2` ABI moves request reads behind lazy host accessors and writes actions through host calls. A rule that only checks `Path` does not need the full request JSON, and a rule that sets one header does not need to serialize an action object.
 
 ## Prior Art
 
@@ -359,7 +379,7 @@ Install TinyGo from https://tinygo.org/getting-started/install/.
 The build command shells out to:
 
 ```sh
-tinygo build -target=wasi -o dist/module.wasm ./examples/basic
+tinygo build -target=wasi -opt=2 -panic=trap -no-debug -o dist/module.wasm ./examples/basic
 ```
 
 ## Limitations
