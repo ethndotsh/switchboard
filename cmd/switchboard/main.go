@@ -119,11 +119,16 @@ func initProject(args []string) error {
 
 func build(ctx context.Context, args []string) error {
 	cfg := loadConfigOrDefault()
-	args = normalizeFlagArgs(args, "out", "name")
+	args = normalizeFlagArgs(args, "out", "name", "tinygo-opt", "tinygo-panic", "wasm-opt-level")
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
 	out := fs.String("out", cfg.Dist, "output directory")
 	name := fs.String("name", cfg.Name, "bundle name")
 	skipTidy := fs.Bool("skip-tidy", false, "skip go mod tidy before TinyGo build")
+	tinyGoOpt := fs.String("tinygo-opt", "2", "TinyGo optimization level: 0, 1, 2, s, or z")
+	tinyGoPanic := fs.String("tinygo-panic", "trap", "TinyGo panic strategy: trap or print")
+	tinyGoDebug := fs.Bool("tinygo-debug", false, "keep TinyGo debug information")
+	runWasmOpt := fs.Bool("wasm-opt", false, "run wasm-opt after TinyGo build")
+	wasmOptLevel := fs.String("wasm-opt-level", "Oz", "wasm-opt level: O, O1, O2, O3, O4, Os, or Oz")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -151,7 +156,11 @@ func build(ctx context.Context, args []string) error {
 		return err
 	}
 	defer cleanup()
-	cmd := exec.CommandContext(ctx, "tinygo", "build", "-target=wasi", "-o", modulePath, buildSource)
+	tinyGoArgs, err := tinyGoBuildArgs(modulePath, buildSource, *tinyGoOpt, *tinyGoPanic, *tinyGoDebug)
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "tinygo", tinyGoArgs...)
 	if buildDir != "" {
 		cmd.Dir = buildDir
 	}
@@ -159,6 +168,11 @@ func build(ctx context.Context, args []string) error {
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return err
+	}
+	if *runWasmOpt {
+		if err := optimizeWasm(ctx, modulePath, *wasmOptLevel); err != nil {
+			return err
+		}
 	}
 	module, err := os.ReadFile(modulePath)
 	if err != nil {
@@ -189,6 +203,54 @@ func build(ctx context.Context, args []string) error {
 	}
 	fmt.Printf("built %s (%s)\n", bundleID, checksum)
 	return nil
+}
+
+func optimizeWasm(ctx context.Context, modulePath, level string) error {
+	tmpPath := modulePath + ".wasm-opt"
+	args, err := wasmOptArgs(modulePath, tmpPath, level)
+	if err != nil {
+		return err
+	}
+	if _, err := exec.LookPath("wasm-opt"); err != nil {
+		return errors.New("wasm-opt is required for --wasm-opt; install Binaryen or omit --wasm-opt")
+	}
+	defer os.Remove(tmpPath)
+	cmd := exec.CommandContext(ctx, "wasm-opt", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, modulePath)
+}
+
+func wasmOptArgs(modulePath, outputPath, level string) ([]string, error) {
+	switch level {
+	case "O", "O1", "O2", "O3", "O4", "Os", "Oz":
+	default:
+		return nil, fmt.Errorf("invalid wasm-opt-level %q", level)
+	}
+	levelFlag := "-" + level
+	return []string{modulePath, "--converge", "--flatten", "--rereloop", levelFlag, "--gufa", levelFlag, "-o", outputPath}, nil
+}
+
+func tinyGoBuildArgs(modulePath, buildSource, optLevel, panicStrategy string, debug bool) ([]string, error) {
+	switch optLevel {
+	case "0", "1", "2", "s", "z":
+	default:
+		return nil, fmt.Errorf("invalid tinygo-opt %q", optLevel)
+	}
+	switch panicStrategy {
+	case "trap", "print":
+	default:
+		return nil, fmt.Errorf("invalid tinygo-panic %q", panicStrategy)
+	}
+	args := []string{"build", "-target=wasi", "-opt=" + optLevel, "-panic=" + panicStrategy}
+	if !debug {
+		args = append(args, "-no-debug")
+	}
+	args = append(args, "-o", modulePath, buildSource)
+	return args, nil
 }
 
 func deploy(ctx context.Context, args []string) error {
@@ -603,12 +665,11 @@ func exampleRuleSource(packageName string) string {
 import "github.com/ethndotsh/switchboard/sdk"
 
 func Handle(req sdk.Request) sdk.Action {
-	if req.Path == "/blocked" {
+	if req.Path() == "/blocked" {
 		return sdk.Deny(403)
 	}
 
-	req.Headers["x-powered-by"] = []string{"switchboard"}
-	return sdk.Next(req)
+	return sdk.Next().SetHeader("x-powered-by", "switchboard")
 }
 `, packageName)
 }

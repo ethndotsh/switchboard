@@ -6,11 +6,10 @@ import (
 )
 
 func Handle(req sdk.Request) sdk.Action {
-	if req.Path == "/blocked" {
+	if req.Path() == "/blocked" {
 		return sdk.Deny(451)
 	}
-	req.Headers["x-switchboard-rule"] = []string{"v2"}
-	return sdk.Next(req)
+	return sdk.Next().SetHeader("x-switchboard-rule", "v2")
 }
 
 //export handle

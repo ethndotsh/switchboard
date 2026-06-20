@@ -47,6 +47,73 @@ func TestNormalizeFlagArgs(t *testing.T) {
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("normalized bool args = %#v", got)
 	}
+
+	got = normalizeFlagArgs([]string{"./rules/basic", "--tinygo-opt", "s", "--tinygo-debug"}, "tinygo-opt", "tinygo-panic")
+	want = []string{"--tinygo-opt", "s", "--tinygo-debug", "./rules/basic"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("normalized tinygo args = %#v", got)
+	}
+
+	got = normalizeFlagArgs([]string{"./rules/basic", "--wasm-opt", "--wasm-opt-level", "O4"}, "wasm-opt-level")
+	want = []string{"--wasm-opt", "--wasm-opt-level", "O4", "./rules/basic"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("normalized wasm-opt args = %#v", got)
+	}
+}
+
+func TestTinyGoBuildArgsDefaultForPerformance(t *testing.T) {
+	args, err := tinyGoBuildArgs("dist/module.wasm", "./rules/basic", "2", "trap", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(args, " ")
+	for _, want := range []string{"build", "-target=wasi", "-opt=2", "-panic=trap", "-no-debug", "-o dist/module.wasm ./rules/basic"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("tinygo args %q missing %q", got, want)
+		}
+	}
+}
+
+func TestTinyGoBuildArgsDebugKeepsDebugInfo(t *testing.T) {
+	args, err := tinyGoBuildArgs("dist/module.wasm", "./rules/basic", "z", "print", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(args, " ")
+	if strings.Contains(got, "-no-debug") {
+		t.Fatalf("debug tinygo args should not strip debug info: %q", got)
+	}
+	if !strings.Contains(got, "-opt=z") || !strings.Contains(got, "-panic=print") {
+		t.Fatalf("tinygo args = %q", got)
+	}
+}
+
+func TestTinyGoBuildArgsRejectsInvalidTuning(t *testing.T) {
+	if _, err := tinyGoBuildArgs("out", "src", "fast", "trap", false); err == nil {
+		t.Fatal("expected invalid opt error")
+	}
+	if _, err := tinyGoBuildArgs("out", "src", "2", "explode", false); err == nil {
+		t.Fatal("expected invalid panic error")
+	}
+}
+
+func TestWasmOptArgs(t *testing.T) {
+	args, err := wasmOptArgs("dist/module.wasm", "dist/module.wasm.opt", "Oz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(args, " ")
+	for _, want := range []string{"dist/module.wasm", "--converge", "--flatten", "--rereloop", "-Oz", "--gufa", "-o dist/module.wasm.opt"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("wasm-opt args %q missing %q", got, want)
+		}
+	}
+}
+
+func TestWasmOptArgsRejectsInvalidLevel(t *testing.T) {
+	if _, err := wasmOptArgs("dist/module.wasm", "dist/module.wasm.opt", "fast"); err == nil {
+		t.Fatal("expected invalid wasm-opt level error")
+	}
 }
 
 func TestInitGeneratesPlainRulePackage(t *testing.T) {
@@ -74,7 +141,7 @@ func TestInitGeneratesPlainRulePackage(t *testing.T) {
 	if strings.Contains(text, "//export handle") || strings.Contains(text, "func main()") || strings.Contains(text, "abi/guest") {
 		t.Fatalf("init rule should not expose wasm wrapper details:\n%s", text)
 	}
-	if !strings.Contains(text, `req.Headers["x-powered-by"] = []string{"switchboard"}`) {
+	if !strings.Contains(text, `return sdk.Next().SetHeader("x-powered-by", "switchboard")`) {
 		t.Fatalf("init rule should set x-powered-by:\n%s", text)
 	}
 }

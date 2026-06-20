@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const ABIVersion = "switchboard/v0"
+const ABIVersion = "switchboard/v1"
 
 type Manifest struct {
 	Name       string `json:"name"`

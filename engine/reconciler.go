@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ethndotsh/switchboard/registry"
-	"github.com/tetratelabs/wazero"
 	"go.uber.org/zap"
 )
 
@@ -56,7 +55,7 @@ type ReconcilerState struct {
 type Reconciler struct {
 	registry  registry.Registry
 	manager   *RuntimeManager
-	runtime   wazero.Runtime
+	runtime   WasmRuntime
 	namespace string
 	channel   string
 	interval  time.Duration
@@ -72,7 +71,7 @@ type Watcher = Reconciler
 
 type Service struct {
 	manager *RuntimeManager
-	runtime wazero.Runtime
+	runtime WasmRuntime
 	cancel  context.CancelFunc
 }
 
@@ -174,7 +173,7 @@ func Start(ctx context.Context, cfg Config, logger *zap.Logger) (*Service, error
 		cancel()
 		return nil, err
 	}
-	wasmRuntime, err := NewWasmRuntime(baseCtx)
+	wasmRuntime, err := NewWazeroRuntime(baseCtx)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -208,7 +207,7 @@ func (s *Service) Close(ctx context.Context) error {
 	return nil
 }
 
-func NewReconciler(reg registry.Registry, manager *RuntimeManager, wasmRuntime wazero.Runtime, cfg ResolvedConfig, logger *zap.Logger) *Reconciler {
+func NewReconciler(reg registry.Registry, manager *RuntimeManager, wasmRuntime WasmRuntime, cfg ResolvedConfig, logger *zap.Logger) *Reconciler {
 	return &Reconciler{
 		registry:  reg,
 		manager:   manager,

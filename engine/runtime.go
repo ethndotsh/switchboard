@@ -2,29 +2,29 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"sync/atomic"
 	"time"
 
 	"github.com/ethndotsh/switchboard"
+	"github.com/ethndotsh/switchboard/engine/wasmapi"
 	"github.com/ethndotsh/switchboard/internal/bundle"
-	"github.com/tetratelabs/wazero"
-	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 	"go.uber.org/zap"
 )
 
 const DefaultPoolSize = 16
 
+type WasmRuntime = wasmapi.WasmRuntime
+type CompiledRule = wasmapi.CompiledRule
+type RuleInstance = wasmapi.RuleInstance
+
 type Runtime struct {
 	id          string
 	manifest    bundle.Manifest
-	wasmRuntime wazero.Runtime
-	module      wazero.CompiledModule
+	wasmRuntime WasmRuntime
+	module      CompiledRule
 	timeout     time.Duration
-	pool        chan api.Module
+	pool        chan RuleInstance
 	closed      atomic.Bool
 	logger      *zap.Logger
 
@@ -85,60 +85,11 @@ func (m *RuntimeManager) Close(ctx context.Context) error {
 	return nil
 }
 
-type invocationState struct {
-	requestData []byte
-	actionData  []byte
-}
-
-type invocationStateKey struct{}
-
-func NewWasmRuntime(ctx context.Context) (wazero.Runtime, error) {
-	wasmRuntime := wazero.NewRuntime(ctx)
-	if _, err := wasi_snapshot_preview1.Instantiate(ctx, wasmRuntime); err != nil {
-		_ = wasmRuntime.Close(ctx)
-		return nil, err
-	}
-	if _, err := wasmRuntime.NewHostModuleBuilder("switchboard").
-		NewFunctionBuilder().WithFunc(func(ctx context.Context) uint32 {
-		state, _ := ctx.Value(invocationStateKey{}).(*invocationState)
-		if state == nil {
-			return 0
-		}
-		return uint32(len(state.requestData))
-	}).Export("request_len").
-		NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, ptr uint32) {
-		state, _ := ctx.Value(invocationStateKey{}).(*invocationState)
-		if state == nil || len(state.requestData) == 0 {
-			return
-		}
-		_ = mod.Memory().Write(ptr, state.requestData)
-	}).Export("read_request").
-		NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, ptr uint32, length uint32) {
-		state, _ := ctx.Value(invocationStateKey{}).(*invocationState)
-		if state == nil {
-			return
-		}
-		if length == 0 {
-			state.actionData = nil
-			return
-		}
-		data, ok := mod.Memory().Read(ptr, length)
-		if ok {
-			state.actionData = append(state.actionData[:0], data...)
-		}
-	}).Export("write_action").
-		Instantiate(ctx); err != nil {
-		_ = wasmRuntime.Close(ctx)
-		return nil, err
-	}
-	return wasmRuntime, nil
-}
-
-func NewRuntime(ctx context.Context, wasmRuntime wazero.Runtime, b bundle.Bundle, timeout time.Duration, poolSize int) (*Runtime, error) {
+func NewRuntime(ctx context.Context, wasmRuntime WasmRuntime, b bundle.Bundle, timeout time.Duration, poolSize int) (*Runtime, error) {
 	return NewRuntimeWithPoolConfig(ctx, wasmRuntime, b, timeout, PoolConfig{MinSize: poolSize, MaxSize: poolSize, Autoscale: false}, nil)
 }
 
-func NewRuntimeWithPoolConfig(ctx context.Context, wasmRuntime wazero.Runtime, b bundle.Bundle, timeout time.Duration, poolCfg PoolConfig, logger *zap.Logger) (*Runtime, error) {
+func NewRuntimeWithPoolConfig(ctx context.Context, wasmRuntime WasmRuntime, b bundle.Bundle, timeout time.Duration, poolCfg PoolConfig, logger *zap.Logger) (*Runtime, error) {
 	if timeout <= 0 {
 		timeout = 50 * time.Millisecond
 	}
@@ -153,7 +104,7 @@ func NewRuntimeWithPoolConfig(ctx context.Context, wasmRuntime wazero.Runtime, b
 	if maxPoolSize < minPoolSize {
 		maxPoolSize = minPoolSize
 	}
-	compiled, err := wasmRuntime.CompileModule(ctx, b.Module)
+	compiled, err := wasmRuntime.Compile(ctx, b.Module)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +114,7 @@ func NewRuntimeWithPoolConfig(ctx context.Context, wasmRuntime wazero.Runtime, b
 		wasmRuntime: wasmRuntime,
 		module:      compiled,
 		timeout:     timeout,
-		pool:        make(chan api.Module, maxPoolSize),
+		pool:        make(chan RuleInstance, maxPoolSize),
 		logger:      logger,
 		minPoolSize: minPoolSize,
 		maxPoolSize: maxPoolSize,
@@ -198,14 +149,6 @@ func (r *Runtime) Validate(ctx context.Context) error {
 }
 
 func (r *Runtime) Invoke(ctx context.Context, req switchboard.Request) (switchboard.Action, error) {
-	ctx, cancel := context.WithTimeout(ctx, r.timeout)
-	defer cancel()
-
-	reqData, err := json.Marshal(req)
-	if err != nil {
-		return switchboard.Action{}, err
-	}
-
 	mod, err := r.acquireModule(ctx)
 	if err != nil {
 		return switchboard.Action{}, err
@@ -215,27 +158,11 @@ func (r *Runtime) Invoke(ctx context.Context, req switchboard.Request) (switchbo
 		r.releaseModule(context.Background(), mod, healthy)
 	}()
 
-	handle := mod.ExportedFunction(r.manifest.Entrypoint)
-	if handle == nil {
-		return switchboard.Action{}, fmt.Errorf("entrypoint %q not found", r.manifest.Entrypoint)
-	}
-	state := &invocationState{requestData: reqData}
-	ctx = context.WithValue(ctx, invocationStateKey{}, state)
-	results, err := handle.Call(ctx)
+	action, err := mod.Invoke(ctx, r.manifest.Entrypoint, req, r.timeout)
 	if err != nil {
 		return switchboard.Action{}, err
 	}
-	if len(results) > 0 && results[0] != 0 {
-		return switchboard.Action{}, fmt.Errorf("rule returned error code %d", results[0])
-	}
 	healthy = true
-	if len(state.actionData) == 0 {
-		return switchboard.Action{Type: switchboard.ActionNext}, nil
-	}
-	var action switchboard.Action
-	if err := json.Unmarshal(state.actionData, &action); err != nil {
-		return switchboard.Action{}, err
-	}
 	if action.Type == "" {
 		action.Type = switchboard.ActionNext
 	}

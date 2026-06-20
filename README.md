@@ -11,7 +11,7 @@ Rule deployments do not restart the proxy. Bundles are downloaded, verified, com
 ## Shape
 
 - Caddy handler module: `http.handlers.switchboard`
-- CLI: `switchboard init`, `switchboard build`, `switchboard dist`, `switchboard deploy`, `switchboard inspect`
+- CLI: `switchboard init`, `switchboard build`, `switchboard deploy`, `switchboard inspect`
 - Registry: S3-compatible object storage only for deploy/inspect/load
 - Runtime: wazero
 - Guest rules: TinyGo WASI modules with a small host-function ABI
@@ -65,12 +65,11 @@ package basic
 import "github.com/ethndotsh/switchboard/sdk"
 
 func Handle(req sdk.Request) sdk.Action {
-	if req.Path == "/blocked" {
+	if req.Path() == "/blocked" {
 		return sdk.Deny(403)
 	}
 
-	req.Headers["x-powered-by"] = []string{"switchboard"}
-	return sdk.Next(req)
+	return sdk.Next().SetHeader("x-powered-by", "switchboard")
 }
 ```
 
@@ -80,13 +79,7 @@ Build a distributable bundle:
 switchboard build
 ```
 
-or equivalently:
-
-```sh
-switchboard dist
-```
-
-`build` runs `go mod tidy` before invoking TinyGo so the generated SDK import is resolved. Use `--skip-tidy` in locked-down CI after dependencies are already pinned.
+`build` runs `go mod tidy` before invoking TinyGo so the generated SDK import is resolved.
 
 Deploy the bundle:
 
@@ -206,10 +199,10 @@ The other files define ordinary Go functions:
 
 ```go
 func BlockInternalPaths(req sdk.Request) sdk.Action {
-	if req.Path == "/internal" {
+	if req.Path() == "/internal" {
 		return sdk.Deny(404)
 	}
-	return sdk.Next(req)
+	return sdk.Next()
 }
 ```
 
@@ -307,7 +300,7 @@ Published images are available at:
 
 ```text
 ghcr.io/ethndotsh/switchboard-caddy:latest
-ghcr.io/ethndotsh/switchboard-caddy:v0.0.1
+ghcr.io/ethndotsh/switchboard-caddy:v0.0.2
 ghcr.io/ethndotsh/switchboard-caddy:sha-<commit>
 ```
 
@@ -334,21 +327,26 @@ GitHub Actions publishes the Caddy image from the checked-out source commit on p
 
 Switchboard optimizes for predictable request-path behavior rather than zero-cost rule execution. Bundles are reconciled, compiled, warmed, and validated off-path; request handling borrows an already-warmed Wasm instance from the active runtime pool.
 
-Local benchmarks on a warmed pool show no-op and simple block rules around 14 us/op in-process. In the Docker e2e workspace, sequential local HTTP pass-through was in the same millisecond range as stock Caddy reverse proxying to the same Python backend. These numbers are directional, not production guarantees; real latency depends on host, pool sizing, traffic shape, rule complexity, and backend behavior.
+Local in-process benchmarks on an Apple M4 Pro with CLI-built optimized artifacts:
+
+| Path | Approximate Result | What It Measures |
+| --- | ---: | --- |
+| HTTP request conversion | 0 allocs/op | Adapter conversion into a Switchboard request |
+| Warm simple block rule | 1.7 us/op | Borrow pooled instance, read path, emit deny |
+| Warm one-header next rule | 5.2 us/op | Read path and emit one header patch |
+| Warm known-header read rule | 5.1 us/op | Read a named request header and emit deny |
+| Warm multi-header patch rule | 7.7 us/op | Emit set, add, add, and delete header ops |
+| Parallel warm-pool invoke | 1.1 us/op | Concurrent borrows from a warmed pool |
+
+The hot path does not download, compile, or instantiate Wasm. The remaining cost is mostly rule execution and ABI calls. The ABI reads request fields lazily and writes action patches through host calls, so "continue unchanged" and "set one header" avoid serializing the full request or action.
+
+Docker e2e HTTP numbers are useful only as a directional smoke test. Sequential local pass-through landed in the same millisecond range as stock Caddy proxying to the same Python backend, but production latency depends on host, pool sizing, traffic shape, rule complexity, TinyGo flags, and memory pressure.
 
 ## Prior Art
 
 Switchboard borrows architectural lessons from Railway's Hikari CDN writeup: keep the host dataplane stable, move request policy into versioned guests, reconcile toward desired state, validate candidates off-path, and activate with an atomic swap. See [Railway's Hikari CDN architecture](https://blog.railway.com/p/railway-cdn).
 
-## TinyGo
-
-Install TinyGo from https://tinygo.org/getting-started/install/.
-
-The build command shells out to:
-
-```sh
-tinygo build -target=wasi -o dist/module.wasm ./examples/basic
-```
+The Wasm runtime path also borrows lessons from Arcjet's production wazero writeups: precompile modules, avoid request-path instantiation, and prefer deliberate data-shape changes over fragile parser tricks. See [Lessons from running WebAssembly in production with Go & wazero](https://blog.arcjet.com/lessons-from-running-webassembly-in-production-with-go-wazero/) and [Making Arcjet's Wasm bot detector smaller and faster](https://blog.arcjet.com/making-arcjets-wasm-bot-detector-smaller-and-faster/).
 
 ## Limitations
 

@@ -22,3 +22,12 @@ func TestParseChannelPointer(t *testing.T) {
 		t.Fatalf("unexpected bundle id %q", pointer.BundleID)
 	}
 }
+
+func TestParseManifestRequiresABIV1(t *testing.T) {
+	if _, err := ParseManifest([]byte(`{"name":"rules","version":"v1","abi_version":"switchboard/v1","entrypoint":"handle"}`)); err != nil {
+		t.Fatalf("parse v1 manifest: %v", err)
+	}
+	if _, err := ParseManifest([]byte(`{"name":"rules","version":"v0","abi_version":"switchboard/v0","entrypoint":"handle"}`)); err == nil {
+		t.Fatal("expected v0 manifest to be rejected")
+	}
+}

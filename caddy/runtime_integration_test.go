@@ -73,7 +73,7 @@ func TestHandlerInvokesBuiltBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if next.Type != switchboard.ActionNext || next.Headers["x-switchboard-rule"] != "basic" {
+	if next.Type != switchboard.ActionNext || !hasHeaderOp(next, switchboard.HeaderOpSet, "x-switchboard-rule", "basic") {
 		t.Fatalf("next action = %#v", next)
 	}
 
@@ -101,6 +101,15 @@ func TestHandlerInvokesBuiltBundle(t *testing.T) {
 	if passReq.Header.Get("x-switchboard-rule") != "basic" {
 		t.Fatalf("header was not applied: %q", passReq.Header.Get("x-switchboard-rule"))
 	}
+}
+
+func hasHeaderOp(action switchboard.Action, op switchboard.HeaderOpType, name string, value string) bool {
+	for _, headerOp := range action.HeaderOps {
+		if headerOp.Op == op && headerOp.Name == name && headerOp.Value == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestHandlerInvocationErrorUsesFailMode(t *testing.T) {
