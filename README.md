@@ -1,0 +1,302 @@
+# Switchboard
+
+Switchboard is an open-source prototype for programmable reverse proxy rules.
+
+Users write request rules in Go, compile them to WebAssembly with TinyGo, upload immutable bundles to object storage, and proxy instances poll a channel pointer to hot-swap the active rule without restarting the proxy.
+
+Switchboard keeps the long-lived dataplane stable, moves fast-changing request policy into versioned Wasm guests, and activates versions only after validation. It applies that pattern to ordinary reverse proxy deployments instead of requiring a custom CDN or edge network.
+
+Rule deployments do not restart the proxy. Bundles are downloaded, verified, compiled, warmed, and validated off the request path, then activated with an atomic swap. In-flight requests continue using the runtime version they started with. If activation fails, the last known-good version remains active.
+
+## Shape
+
+- Caddy handler module: `http.handlers.switchboard`
+- CLI: `switchboard init`, `switchboard build`, `switchboard dist`, `switchboard deploy`, `switchboard inspect`
+- Registry: S3-compatible object storage only for deploy/inspect/load
+- Runtime: wazero
+- Guest rules: TinyGo WASI modules with a small host-function ABI
+- Reconciliation: background channel polling with last-known-good fallback
+
+## Install
+
+Install the CLI onto your `PATH`:
+
+```sh
+go install github.com/ethndotsh/switchboard/cmd/switchboard@latest
+```
+
+For local development from this repository:
+
+```sh
+go install ./cmd/switchboard
+```
+
+Install TinyGo too: https://tinygo.org/getting-started/install/.
+
+## Quickstart
+
+Create a rule project:
+
+```sh
+mkdir my-rules
+cd my-rules
+switchboard init --name my-rules --registry s3://switchboard/prod
+```
+
+This writes:
+
+```text
+go.mod
+switchboard.yaml
+rules/basic/rule.go
+```
+
+Rule projects use plain Go packages. `switchboard build` generates the TinyGo/Wasm export wrapper:
+
+```go
+package basic
+
+import "github.com/ethndotsh/switchboard/sdk"
+
+func Handle(req sdk.Request) sdk.Action {
+	if req.Path == "/blocked" {
+		return sdk.Deny(403)
+	}
+
+	req.Headers["x-powered-by"] = []string{"switchboard"}
+	return sdk.Next(req)
+}
+```
+
+Build a distributable bundle:
+
+```sh
+switchboard build
+```
+
+or equivalently:
+
+```sh
+switchboard dist
+```
+
+`build` runs `go mod tidy` before invoking TinyGo so the generated SDK import is resolved. Use `--skip-tidy` in locked-down CI after dependencies are already pinned.
+
+Deploy the bundle:
+
+```sh
+switchboard deploy
+```
+
+Inspect the active channel:
+
+```sh
+switchboard inspect
+```
+
+`switchboard.yaml` supplies the defaults:
+
+```yaml
+name: my-rules
+rule: ./rules/basic
+dist: ./dist
+namespace: customer-a
+channel: prod
+registry: s3://switchboard/prod
+```
+
+Environment variables are expanded before the YAML is parsed:
+
+```yaml
+name: ${SWITCHBOARD_NAME:-my-rules}
+rule: ${SWITCHBOARD_RULE:-./rules/basic}
+dist: ${SWITCHBOARD_DIST:-./dist}
+namespace: ${SWITCHBOARD_NAMESPACE:-customer-a}
+channel: ${SWITCHBOARD_CHANNEL:-prod}
+registry: s3://${SWITCHBOARD_S3_BUCKET}/${SWITCHBOARD_S3_PREFIX:-prod}
+```
+
+Supported forms are `$VAR`, `${VAR}`, `${VAR:-fallback}` for unset or empty values, and `${VAR-fallback}` for unset values only.
+
+## Object Storage
+
+Switchboard expects an S3-compatible registry. For local development, run MinIO or use any S3-compatible endpoint.
+
+Required environment variables:
+
+```sh
+SWITCHBOARD_S3_ENDPOINT=localhost:9000
+SWITCHBOARD_S3_ACCESS_KEY=minioadmin
+SWITCHBOARD_S3_SECRET_KEY=minioadmin
+SWITCHBOARD_S3_BUCKET=switchboard
+SWITCHBOARD_S3_INSECURE=true
+```
+
+Objects use this layout:
+
+```text
+channels/prod.json
+bundles/2026-06-19T12-00-00Z-abc123/module.wasm
+bundles/2026-06-19T12-00-00Z-abc123/manifest.json
+bundles/2026-06-19T12-00-00Z-abc123/checksum.txt
+```
+
+Namespaces are optional. Without a namespace, Switchboard keeps the global layout above. With `namespace: customer-a`, channels and bundles are isolated under:
+
+```text
+namespaces/customer-a/channels/prod.json
+namespaces/customer-a/bundles/2026-06-19T12-00-00Z-abc123/module.wasm
+namespaces/customer-a/bundles/2026-06-19T12-00-00Z-abc123/manifest.json
+namespaces/customer-a/bundles/2026-06-19T12-00-00Z-abc123/checksum.txt
+```
+
+Registry URL prefixes remain a base path. `registry: s3://switchboard/acme` plus `namespace: edge` writes under `acme/namespaces/edge/...`.
+
+## Repository Example
+
+Build a rule:
+
+```sh
+go run ./cmd/switchboard build --out ./dist ./examples/basic
+```
+
+Deploy it to object storage:
+
+```sh
+go run ./cmd/switchboard deploy ./dist --channel prod
+```
+
+Inspect the active channel pointer:
+
+```sh
+go run ./cmd/switchboard inspect --channel prod
+```
+
+## Rule Chains
+
+A Switchboard bundle is a normal Go package. It needs one `Handle(req sdk.Request) sdk.Action` function, but the rule logic can live across as many files as you want:
+
+```text
+rules/public/
+  rule.go
+  security.go
+  routing.go
+  headers.go
+```
+
+`rule.go` is the top-level ordering file:
+
+```go
+func Handle(req sdk.Request) sdk.Action {
+	return sdk.Chain(req,
+		BlockInternalPaths,
+		RewriteLegacyPaths,
+		AddRuleHeader,
+	)
+}
+```
+
+The other files define ordinary Go functions:
+
+```go
+func BlockInternalPaths(req sdk.Request) sdk.Action {
+	if req.Path == "/internal" {
+		return sdk.Deny(404)
+	}
+	return sdk.Next(req)
+}
+```
+
+Build the whole package:
+
+```sh
+switchboard build ./rules/public
+```
+
+To use different rule packages for different Caddy routes, deploy them to different channels and attach the channel where that route lives:
+
+```caddyfile
+example.com {
+	route /admin/* {
+		switchboard {
+			registry s3
+			namespace customer-a
+			channel admin
+		}
+
+		reverse_proxy admin:3000
+	}
+
+	route {
+		switchboard {
+			registry s3
+			namespace customer-a
+			channel public
+		}
+
+		reverse_proxy app:3000
+	}
+}
+```
+
+Each route gets one atomic active bundle. Namespace groups channels; channel remains the stable deployment pointer. Inside a bundle, ordering is explicit Go code.
+
+## Caddy
+
+Build with `xcaddy` from this module:
+
+```sh
+xcaddy build --with github.com/ethndotsh/switchboard/caddy=./caddy
+```
+
+Caddyfile:
+
+```caddyfile
+:8080 {
+	route {
+		switchboard {
+			registry s3
+			namespace customer-a
+			channel prod
+			poll_interval 2s
+			pool_size 16
+			fail_mode open
+		}
+
+		reverse_proxy localhost:9000
+	}
+}
+```
+
+The handler never downloads, compiles, or instantiates bundles on the request path. A background reconciler polls `channels/{channel}.json`, downloads immutable bundles, verifies checksums, compiles Wasm, warms the configured guest pool, validates the candidate, and atomically swaps the active runtime.
+
+If the warmed pool is exhausted on the request path, Switchboard treats the rule as unavailable and applies `fail_mode`.
+
+## Performance Notes
+
+Switchboard optimizes for predictable request-path behavior rather than zero-cost rule execution. Bundles are reconciled, compiled, warmed, and validated off-path; request handling borrows an already-warmed Wasm instance from the active runtime pool.
+
+Local benchmarks on a warmed pool show no-op and simple block rules around 14 us/op in-process. In the Docker e2e workspace, sequential local HTTP pass-through was in the same millisecond range as stock Caddy reverse proxying to the same Python backend. These numbers are directional, not production guarantees; real latency depends on host, pool sizing, traffic shape, rule complexity, and backend behavior.
+
+## Prior Art
+
+Switchboard borrows architectural lessons from Railway's Hikari CDN writeup: keep the host dataplane stable, move request policy into versioned guests, reconcile toward desired state, validate candidates off-path, and activate with an atomic swap. See [Railway's Hikari CDN architecture](https://blog.railway.com/p/railway-cdn).
+
+## TinyGo
+
+Install TinyGo from https://tinygo.org/getting-started/install/.
+
+The build command shells out to:
+
+```sh
+tinygo build -target=wasi -o dist/module.wasm ./examples/basic
+```
+
+## Limitations
+
+- Request body and response body mutation are intentionally out of scope.
+- There is no hosted control plane.
+- Caddy is the reference adapter.
+- The ABI is intentionally small and will likely change.
+- Registry operations require S3-compatible object storage credentials.
+- Switchboard is not a CDN, cache, BGP system, anycast network, or hosted control plane.

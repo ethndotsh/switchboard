@@ -1,0 +1,24 @@
+{
+	admin off
+}
+
+:8080 {
+	log {
+		output stdout
+		format console
+		level INFO
+	}
+
+	route {
+		switchboard {
+			registry s3
+			channel prod
+			poll_interval 1s
+			invoke_timeout 500ms
+			pool_size 16
+			fail_mode open
+		}
+
+		reverse_proxy backend:9000
+	}
+}
