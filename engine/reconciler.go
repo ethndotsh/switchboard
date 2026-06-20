@@ -20,7 +20,10 @@ type Config struct {
 	PollInterval  string
 	FailMode      string
 	InvokeTimeout string
+	PoolAutoscale string
 	PoolSize      int
+	MinPoolSize   int
+	MaxPoolSize   int
 }
 
 type ResolvedConfig struct {
@@ -31,7 +34,10 @@ type ResolvedConfig struct {
 	FailMode      string
 	PollInterval  time.Duration
 	InvokeTimeout time.Duration
+	PoolAutoscale bool
 	PoolSize      int
+	MinPoolSize   int
+	MaxPoolSize   int
 }
 
 type ReconcilerState struct {
@@ -55,7 +61,7 @@ type Reconciler struct {
 	channel   string
 	interval  time.Duration
 	timeout   time.Duration
-	poolSize  int
+	poolCfg   PoolConfig
 	logger    *zap.Logger
 
 	mu    sync.RWMutex
@@ -79,6 +85,7 @@ func ResolveConfig(cfg Config) (ResolvedConfig, error) {
 		FailMode:      cfg.FailMode,
 		PollInterval:  2 * time.Second,
 		InvokeTimeout: 50 * time.Millisecond,
+		PoolAutoscale: true,
 		PoolSize:      cfg.PoolSize,
 	}
 	if resolved.Channel == "" {
@@ -90,8 +97,41 @@ func ResolveConfig(cfg Config) (ResolvedConfig, error) {
 	if resolved.FailMode == "" {
 		resolved.FailMode = "open"
 	}
-	if resolved.PoolSize <= 0 {
-		resolved.PoolSize = DefaultPoolSize
+	autoscale, err := parsePoolAutoscale(cfg.PoolAutoscale)
+	if err != nil {
+		return ResolvedConfig{}, err
+	}
+	resolved.PoolAutoscale = autoscale
+	if cfg.PoolSize < 0 {
+		return ResolvedConfig{}, fmt.Errorf("pool_size must be greater than zero")
+	}
+	if cfg.MinPoolSize < 0 {
+		return ResolvedConfig{}, fmt.Errorf("min_pool_size must be greater than zero")
+	}
+	if cfg.MaxPoolSize < 0 {
+		return ResolvedConfig{}, fmt.Errorf("max_pool_size must be greater than zero")
+	}
+	if cfg.MinPoolSize > 0 {
+		resolved.MinPoolSize = cfg.MinPoolSize
+	} else if cfg.PoolSize > 0 {
+		resolved.MinPoolSize = cfg.PoolSize
+	} else {
+		resolved.MinPoolSize = DefaultPoolSize
+	}
+	resolved.PoolSize = resolved.MinPoolSize
+	if cfg.MaxPoolSize > 0 {
+		resolved.MaxPoolSize = cfg.MaxPoolSize
+	} else {
+		resolved.MaxPoolSize = resolved.MinPoolSize * 4
+		if resolved.MaxPoolSize > DefaultMaxPoolSize {
+			resolved.MaxPoolSize = DefaultMaxPoolSize
+		}
+	}
+	if !resolved.PoolAutoscale {
+		resolved.MaxPoolSize = resolved.MinPoolSize
+	}
+	if resolved.MaxPoolSize < resolved.MinPoolSize {
+		return ResolvedConfig{}, fmt.Errorf("max_pool_size must be greater than or equal to min_pool_size")
 	}
 	if cfg.PollInterval != "" {
 		interval, err := time.ParseDuration(cfg.PollInterval)
@@ -177,8 +217,12 @@ func NewReconciler(reg registry.Registry, manager *RuntimeManager, wasmRuntime w
 		channel:   cfg.Channel,
 		interval:  cfg.PollInterval,
 		timeout:   cfg.InvokeTimeout,
-		poolSize:  cfg.PoolSize,
-		logger:    logger,
+		poolCfg: PoolConfig{
+			MinSize:   cfg.MinPoolSize,
+			MaxSize:   cfg.MaxPoolSize,
+			Autoscale: cfg.PoolAutoscale,
+		},
+		logger: logger,
 	}
 }
 
@@ -258,11 +302,12 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 	}
 	r.log().Info("switchboard bundle checksum verified", zap.String("bundle_id", pointer.BundleID), zap.String("checksum", b.Checksum))
 
-	r.log().Info("switchboard bundle compile start", zap.String("bundle_id", pointer.BundleID), zap.Int("pool_size", r.effectivePoolSize()))
-	candidate, err := NewRuntime(ctx, r.runtime, b, r.timeout, r.effectivePoolSize())
+	poolCfg := r.effectivePoolConfig()
+	r.log().Info("switchboard bundle compile start", zap.String("bundle_id", pointer.BundleID), zap.Int("min_pool_size", poolCfg.MinSize), zap.Int("max_pool_size", poolCfg.MaxSize), zap.Bool("pool_autoscale", poolCfg.Autoscale))
+	candidate, err := NewRuntimeWithPoolConfig(ctx, r.runtime, b, r.timeout, poolCfg, r.logger)
 	if err != nil {
 		r.recordFailure(pointer.BundleID, err)
-		r.log().Warn("failed to compile or warm switchboard bundle", zap.String("bundle_id", pointer.BundleID), zap.Int("pool_size", r.effectivePoolSize()), zap.Error(err))
+		r.log().Warn("failed to compile or warm switchboard bundle", zap.String("bundle_id", pointer.BundleID), zap.Int("min_pool_size", poolCfg.MinSize), zap.Int("max_pool_size", poolCfg.MaxSize), zap.Bool("pool_autoscale", poolCfg.Autoscale), zap.Error(err))
 		return
 	}
 	r.log().Info("switchboard bundle compile and pool warm succeeded", zap.String("bundle_id", pointer.BundleID), zap.Int("pool_size", candidate.PoolSize()))
@@ -280,11 +325,18 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 	r.log().Info("activated switchboard bundle", zap.String("bundle_id", pointer.BundleID), zap.String("namespace", r.namespace), zap.String("channel", r.channel))
 }
 
-func (r *Reconciler) effectivePoolSize() int {
-	if r.poolSize <= 0 {
-		return DefaultPoolSize
+func (r *Reconciler) effectivePoolConfig() PoolConfig {
+	cfg := r.poolCfg
+	if cfg.MinSize <= 0 {
+		cfg.MinSize = DefaultPoolSize
 	}
-	return r.poolSize
+	if cfg.MaxSize <= 0 {
+		cfg.MaxSize = cfg.MinSize
+	}
+	if cfg.MaxSize < cfg.MinSize {
+		cfg.MaxSize = cfg.MinSize
+	}
+	return cfg
 }
 
 func (r *Reconciler) managerCurrent() *Runtime {
@@ -339,4 +391,15 @@ func (r *Reconciler) log() *zap.Logger {
 		return zap.NewNop()
 	}
 	return r.logger
+}
+
+func parsePoolAutoscale(value string) (bool, error) {
+	switch value {
+	case "", "on", "true":
+		return true, nil
+	case "off", "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid pool_autoscale %q; expected on/off/true/false", value)
+	}
 }

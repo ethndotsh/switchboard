@@ -37,7 +37,7 @@ func TestReconcilerActivatesS3Bundle(t *testing.T) {
 		namespace: os.Getenv("SWITCHBOARD_NAMESPACE"),
 		channel:   "prod",
 		timeout:   500 * time.Millisecond,
-		poolSize:  2,
+		poolCfg:   PoolConfig{MinSize: 2, MaxSize: 2, Autoscale: false},
 	}
 	reconciler.reconcile(ctx)
 

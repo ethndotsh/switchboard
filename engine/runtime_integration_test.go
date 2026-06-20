@@ -45,7 +45,7 @@ func TestRuntimePoolExhaustion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer held.Close(ctx)
+	defer runtime.releaseModule(ctx, held, true)
 
 	_, err = runtime.Invoke(ctx, switchboard.Request{Path: "/", Method: "GET", Headers: map[string][]string{}})
 	if err != ErrRuntimePoolExhausted {
@@ -53,7 +53,56 @@ func TestRuntimePoolExhaustion(t *testing.T) {
 	}
 }
 
+func TestRuntimeAutoscaleIncreasesAfterExhaustion(t *testing.T) {
+	runtime, ctx, cleanup := loadRuntimeForTestWithPoolConfig(t, PoolConfig{MinSize: 1, MaxSize: 2, Autoscale: true})
+	defer cleanup()
+	runtime.scaleInterval = time.Hour
+
+	held, err := runtime.acquireModule(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runtime.Invoke(ctx, switchboard.Request{Path: "/", Method: "GET", Headers: map[string][]string{}})
+	if err != ErrRuntimePoolExhausted {
+		t.Fatalf("expected pool exhaustion, got %v", err)
+	}
+	if int(runtime.totalInstances.Load()) != 1 {
+		t.Fatalf("request path instantiated a module; total instances = %d", runtime.totalInstances.Load())
+	}
+	runtime.adjustPool(ctx)
+	if runtime.PoolSize() != 2 {
+		t.Fatalf("pool target = %d", runtime.PoolSize())
+	}
+	if int(runtime.totalInstances.Load()) != 2 {
+		t.Fatalf("total instances = %d", runtime.totalInstances.Load())
+	}
+	runtime.releaseModule(ctx, held, true)
+}
+
+func TestRuntimeAutoscaleDecreasesAfterSustainedIdle(t *testing.T) {
+	runtime, ctx, cleanup := loadRuntimeForTestWithPoolConfig(t, PoolConfig{MinSize: 1, MaxSize: 4, Autoscale: true})
+	defer cleanup()
+	runtime.scaleInterval = time.Hour
+	runtime.idleWindowLimit = 1
+	runtime.targetPoolSize.Store(4)
+	if err := runtime.Warm(ctx, 3); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime.adjustPool(ctx)
+	if runtime.PoolSize() != 3 {
+		t.Fatalf("pool target = %d", runtime.PoolSize())
+	}
+	if int(runtime.totalInstances.Load()) != 3 {
+		t.Fatalf("total instances = %d", runtime.totalInstances.Load())
+	}
+}
+
 func loadRuntimeForTest(t testing.TB, poolSize int) (*Runtime, context.Context, func()) {
+	return loadRuntimeForTestWithPoolConfig(t, PoolConfig{MinSize: poolSize, MaxSize: poolSize, Autoscale: false})
+}
+
+func loadRuntimeForTestWithPoolConfig(t testing.TB, poolCfg PoolConfig) (*Runtime, context.Context, func()) {
 	t.Helper()
 	dist := filepath.Join("..", "dist")
 	module, err := os.ReadFile(filepath.Join(dist, "module.wasm"))
@@ -85,12 +134,12 @@ func loadRuntimeForTest(t testing.TB, poolSize int) (*Runtime, context.Context, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := NewRuntime(ctx, wasmRuntime, bundle.Bundle{
+	runtime, err := NewRuntimeWithPoolConfig(ctx, wasmRuntime, bundle.Bundle{
 		ID:       manifest.Version,
 		Module:   module,
 		Manifest: manifest,
 		Checksum: checksum,
-	}, 500*time.Millisecond, poolSize)
+	}, 500*time.Millisecond, poolCfg, nil)
 	if err != nil {
 		_ = wasmRuntime.Close(ctx)
 		t.Fatal(err)

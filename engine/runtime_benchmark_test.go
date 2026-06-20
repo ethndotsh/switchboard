@@ -13,6 +13,10 @@ import (
 )
 
 func loadBenchmarkRuntime(b *testing.B, poolSize int) (*Runtime, context.Context, func()) {
+	return loadBenchmarkRuntimeWithPoolConfig(b, PoolConfig{MinSize: poolSize, MaxSize: poolSize, Autoscale: false})
+}
+
+func loadBenchmarkRuntimeWithPoolConfig(b *testing.B, poolCfg PoolConfig) (*Runtime, context.Context, func()) {
 	b.Helper()
 
 	dist := os.Getenv("SWITCHBOARD_BENCH_DIST")
@@ -48,12 +52,12 @@ func loadBenchmarkRuntime(b *testing.B, poolSize int) (*Runtime, context.Context
 	if err != nil {
 		b.Fatal(err)
 	}
-	runtime, err := NewRuntime(ctx, wasmRuntime, bundle.Bundle{
+	runtime, err := NewRuntimeWithPoolConfig(ctx, wasmRuntime, bundle.Bundle{
 		ID:       manifest.Version,
 		Module:   module,
 		Manifest: manifest,
 		Checksum: checksum,
-	}, 500*time.Millisecond, poolSize)
+	}, 500*time.Millisecond, poolCfg, nil)
 	if err != nil {
 		_ = wasmRuntime.Close(ctx)
 		b.Fatal(err)
@@ -66,6 +70,20 @@ func loadBenchmarkRuntime(b *testing.B, poolSize int) (*Runtime, context.Context
 
 func BenchmarkRuntimeInvokeWarmPool(b *testing.B) {
 	runtime, ctx, cleanup := loadBenchmarkRuntime(b, 1)
+	defer cleanup()
+
+	req := switchboard.Request{Path: "/", Method: "GET", Headers: map[string][]string{}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := runtime.Invoke(ctx, req); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkRuntimeInvokeAdaptiveSteadyState(b *testing.B) {
+	runtime, ctx, cleanup := loadBenchmarkRuntimeWithPoolConfig(b, PoolConfig{MinSize: 1, MaxSize: 4, Autoscale: true})
 	defer cleanup()
 
 	req := switchboard.Request{Path: "/", Method: "GET", Headers: map[string][]string{}}
@@ -116,7 +134,30 @@ func BenchmarkRuntimePoolExhausted(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer held.Close(ctx)
+	defer runtime.releaseModule(ctx, held, true)
+
+	req := switchboard.Request{Path: "/", Method: "GET", Headers: map[string][]string{}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := runtime.Invoke(ctx, req); err != ErrRuntimePoolExhausted {
+			b.Fatalf("expected pool exhaustion, got %v", err)
+		}
+	}
+}
+
+func BenchmarkRuntimeAdaptivePoolExhaustedSignal(b *testing.B) {
+	runtime, ctx, cleanup := loadBenchmarkRuntimeWithPoolConfig(b, PoolConfig{MinSize: 1, MaxSize: 4, Autoscale: true})
+	defer cleanup()
+	if runtime.scaleCancel != nil {
+		runtime.scaleCancel()
+	}
+
+	held, err := runtime.acquireModule(ctx)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer runtime.releaseModule(ctx, held, true)
 
 	req := switchboard.Request{Path: "/", Method: "GET", Headers: map[string][]string{}}
 	b.ReportAllocs()

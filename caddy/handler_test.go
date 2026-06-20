@@ -59,6 +59,9 @@ func TestUnmarshalCaddyfileParsesCurrentFields(t *testing.T) {
 		fail_mode closed
 		invoke_timeout 75ms
 		pool_size 32
+		pool_autoscale off
+		min_pool_size 16
+		max_pool_size 64
 	}`)
 	var handler Switchboard
 	if err := handler.UnmarshalCaddyfile(dispenser); err != nil {
@@ -81,6 +84,33 @@ func TestUnmarshalCaddyfileParsesCurrentFields(t *testing.T) {
 	}
 	if handler.PoolSize != 32 {
 		t.Fatalf("pool size = %d", handler.PoolSize)
+	}
+	if handler.PoolAutoscale != "off" {
+		t.Fatalf("pool autoscale = %q", handler.PoolAutoscale)
+	}
+	if handler.MinPoolSize != 16 || handler.MaxPoolSize != 64 {
+		t.Fatalf("pool bounds = %d %d", handler.MinPoolSize, handler.MaxPoolSize)
+	}
+}
+
+func TestUnmarshalCaddyfileRejectsInvalidPoolAutoscale(t *testing.T) {
+	dispenser := caddyfile.NewTestDispenser(`switchboard {
+		pool_autoscale maybe
+	}`)
+	var handler Switchboard
+	if err := handler.UnmarshalCaddyfile(dispenser); err == nil {
+		t.Fatal("expected invalid pool_autoscale error")
+	}
+}
+
+func TestUnmarshalCaddyfileRejectsInvalidPoolBounds(t *testing.T) {
+	dispenser := caddyfile.NewTestDispenser(`switchboard {
+		min_pool_size 16
+		max_pool_size 8
+	}`)
+	var handler Switchboard
+	if err := handler.UnmarshalCaddyfile(dispenser); err == nil {
+		t.Fatal("expected invalid pool bounds error")
 	}
 }
 

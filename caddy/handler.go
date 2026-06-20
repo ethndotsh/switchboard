@@ -33,7 +33,10 @@ type Switchboard struct {
 	PollInterval  string `json:"poll_interval,omitempty"`
 	FailMode      string `json:"fail_mode,omitempty"`
 	InvokeTimeout string `json:"invoke_timeout,omitempty"`
+	PoolAutoscale string `json:"pool_autoscale,omitempty"`
 	PoolSize      int    `json:"pool_size,omitempty"`
+	MinPoolSize   int    `json:"min_pool_size,omitempty"`
+	MaxPoolSize   int    `json:"max_pool_size,omitempty"`
 
 	service *engine.Service
 	manager *engine.RuntimeManager
@@ -57,7 +60,10 @@ func (s *Switchboard) Provision(ctx caddyserver.Context) error {
 		PollInterval:  s.PollInterval,
 		FailMode:      s.FailMode,
 		InvokeTimeout: s.InvokeTimeout,
+		PoolAutoscale: s.PoolAutoscale,
 		PoolSize:      s.PoolSize,
+		MinPoolSize:   s.MinPoolSize,
+		MaxPoolSize:   s.MaxPoolSize,
 	}, s.logger)
 	if err != nil {
 		return err
@@ -167,11 +173,51 @@ func (s *Switchboard) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				if _, err := fmt.Sscanf(d.Val(), "%d", &poolSize); err != nil {
 					return d.Errf("invalid pool_size %q", d.Val())
 				}
+				if poolSize <= 0 {
+					return d.Errf("invalid pool_size %q", d.Val())
+				}
 				s.PoolSize = poolSize
+			case "pool_autoscale":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				switch d.Val() {
+				case "on", "off", "true", "false":
+					s.PoolAutoscale = d.Val()
+				default:
+					return d.Errf("invalid pool_autoscale %q", d.Val())
+				}
+			case "min_pool_size":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				var minPoolSize int
+				if _, err := fmt.Sscanf(d.Val(), "%d", &minPoolSize); err != nil {
+					return d.Errf("invalid min_pool_size %q", d.Val())
+				}
+				if minPoolSize <= 0 {
+					return d.Errf("invalid min_pool_size %q", d.Val())
+				}
+				s.MinPoolSize = minPoolSize
+			case "max_pool_size":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				var maxPoolSize int
+				if _, err := fmt.Sscanf(d.Val(), "%d", &maxPoolSize); err != nil {
+					return d.Errf("invalid max_pool_size %q", d.Val())
+				}
+				if maxPoolSize <= 0 {
+					return d.Errf("invalid max_pool_size %q", d.Val())
+				}
+				s.MaxPoolSize = maxPoolSize
 			default:
 				return d.Errf("unrecognized switchboard directive %q", d.Val())
 			}
 		}
+	}
+	if s.MinPoolSize > 0 && s.MaxPoolSize > 0 && s.MaxPoolSize < s.MinPoolSize {
+		return d.Errf("max_pool_size must be greater than or equal to min_pool_size")
 	}
 	return nil
 }

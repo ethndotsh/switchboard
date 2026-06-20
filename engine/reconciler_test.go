@@ -108,4 +108,54 @@ func TestResolveConfigDefaults(t *testing.T) {
 	if cfg.PoolSize != DefaultPoolSize {
 		t.Fatalf("pool size = %d", cfg.PoolSize)
 	}
+	if !cfg.PoolAutoscale {
+		t.Fatal("expected pool autoscale to default on")
+	}
+	if cfg.MinPoolSize != DefaultPoolSize {
+		t.Fatalf("min pool size = %d", cfg.MinPoolSize)
+	}
+	if cfg.MaxPoolSize != DefaultPoolSize*4 {
+		t.Fatalf("max pool size = %d", cfg.MaxPoolSize)
+	}
+}
+
+func TestResolveConfigPoolSizeIsDefaultMinimum(t *testing.T) {
+	cfg, err := ResolveConfig(Config{PoolSize: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MinPoolSize != 32 {
+		t.Fatalf("min pool size = %d", cfg.MinPoolSize)
+	}
+	if cfg.MaxPoolSize != 128 {
+		t.Fatalf("max pool size = %d", cfg.MaxPoolSize)
+	}
+}
+
+func TestResolveConfigPoolAutoscaleOffUsesFixedPool(t *testing.T) {
+	cfg, err := ResolveConfig(Config{PoolSize: 8, PoolAutoscale: "off"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PoolAutoscale {
+		t.Fatal("expected autoscale off")
+	}
+	if cfg.MinPoolSize != 8 || cfg.MaxPoolSize != 8 {
+		t.Fatalf("pool bounds = %d %d", cfg.MinPoolSize, cfg.MaxPoolSize)
+	}
+}
+
+func TestResolveConfigRejectsInvalidPoolConfig(t *testing.T) {
+	tests := []Config{
+		{PoolAutoscale: "maybe"},
+		{PoolSize: -1},
+		{MinPoolSize: -1},
+		{MaxPoolSize: -1},
+		{MinPoolSize: 16, MaxPoolSize: 8},
+	}
+	for _, cfg := range tests {
+		if _, err := ResolveConfig(cfg); err == nil {
+			t.Fatalf("expected error for config %#v", cfg)
+		}
+	}
 }

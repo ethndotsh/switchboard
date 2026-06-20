@@ -284,6 +284,9 @@ Caddyfile:
 			channel prod
 			poll_interval 2s
 			pool_size 16
+			pool_autoscale on
+			min_pool_size 16
+			max_pool_size 64
 			fail_mode open
 		}
 
@@ -292,9 +295,11 @@ Caddyfile:
 }
 ```
 
-The handler never downloads, compiles, or instantiates bundles on the request path. A background reconciler polls `channels/{channel}.json`, downloads immutable bundles, verifies checksums, compiles Wasm, warms the configured guest pool, validates the candidate, and atomically swaps the active runtime.
+The handler never downloads, compiles, or instantiates bundles on the request path. A background reconciler polls `channels/{channel}.json`, downloads immutable bundles, verifies checksums, compiles Wasm, warms the configured minimum guest pool, validates the candidate, and atomically swaps the active runtime.
 
 If the warmed pool is exhausted on the request path, Switchboard treats the rule as unavailable and applies `fail_mode`.
+
+Warm pools adapt by default. `pool_size` remains the default floor, `min_pool_size` can set that floor explicitly, and `max_pool_size` bounds background growth. Use `pool_autoscale off` for fixed-capacity pools.
 
 ## Docker
 
@@ -302,7 +307,7 @@ Published images are available at:
 
 ```text
 ghcr.io/ethndotsh/switchboard-caddy:latest
-ghcr.io/ethndotsh/switchboard-caddy:v0.1.0
+ghcr.io/ethndotsh/switchboard-caddy:v0.0.1
 ghcr.io/ethndotsh/switchboard-caddy:sha-<commit>
 ```
 

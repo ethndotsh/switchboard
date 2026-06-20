@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"sync/atomic"
@@ -14,11 +13,10 @@ import (
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+	"go.uber.org/zap"
 )
 
 const DefaultPoolSize = 16
-
-var ErrRuntimePoolExhausted = errors.New("switchboard runtime pool exhausted")
 
 type Runtime struct {
 	id          string
@@ -28,6 +26,20 @@ type Runtime struct {
 	timeout     time.Duration
 	pool        chan api.Module
 	closed      atomic.Bool
+	logger      *zap.Logger
+
+	minPoolSize       int
+	maxPoolSize       int
+	autoscale         bool
+	scaleInterval     time.Duration
+	idleWindowLimit   int
+	idleWindows       int
+	scaleCancel       context.CancelFunc
+	targetPoolSize    atomic.Int64
+	totalInstances    atomic.Int64
+	inflight          atomic.Int64
+	inflightHighWater atomic.Int64
+	exhaustions       atomic.Int64
 }
 
 type RuntimeManager struct {
@@ -123,11 +135,23 @@ func NewWasmRuntime(ctx context.Context) (wazero.Runtime, error) {
 }
 
 func NewRuntime(ctx context.Context, wasmRuntime wazero.Runtime, b bundle.Bundle, timeout time.Duration, poolSize int) (*Runtime, error) {
+	return NewRuntimeWithPoolConfig(ctx, wasmRuntime, b, timeout, PoolConfig{MinSize: poolSize, MaxSize: poolSize, Autoscale: false}, nil)
+}
+
+func NewRuntimeWithPoolConfig(ctx context.Context, wasmRuntime wazero.Runtime, b bundle.Bundle, timeout time.Duration, poolCfg PoolConfig, logger *zap.Logger) (*Runtime, error) {
 	if timeout <= 0 {
 		timeout = 50 * time.Millisecond
 	}
-	if poolSize <= 0 {
-		poolSize = DefaultPoolSize
+	minPoolSize := poolCfg.MinSize
+	if minPoolSize <= 0 {
+		minPoolSize = DefaultPoolSize
+	}
+	maxPoolSize := poolCfg.MaxSize
+	if maxPoolSize <= 0 {
+		maxPoolSize = minPoolSize
+	}
+	if maxPoolSize < minPoolSize {
+		maxPoolSize = minPoolSize
 	}
 	compiled, err := wasmRuntime.CompileModule(ctx, b.Module)
 	if err != nil {
@@ -139,11 +163,24 @@ func NewRuntime(ctx context.Context, wasmRuntime wazero.Runtime, b bundle.Bundle
 		wasmRuntime: wasmRuntime,
 		module:      compiled,
 		timeout:     timeout,
-		pool:        make(chan api.Module, poolSize),
+		pool:        make(chan api.Module, maxPoolSize),
+		logger:      logger,
+		minPoolSize: minPoolSize,
+		maxPoolSize: maxPoolSize,
+		autoscale:   poolCfg.Autoscale && maxPoolSize > minPoolSize,
+
+		scaleInterval:   defaultPoolScaleInterval,
+		idleWindowLimit: defaultPoolIdleWindows,
 	}
-	if err := runtime.Warm(ctx, poolSize); err != nil {
+	runtime.targetPoolSize.Store(int64(minPoolSize))
+	if err := runtime.Warm(ctx, minPoolSize); err != nil {
 		_ = runtime.Close(ctx)
 		return nil, err
+	}
+	if runtime.autoscale {
+		scaleCtx, cancel := context.WithCancel(context.Background())
+		runtime.scaleCancel = cancel
+		go runtime.runPoolController(scaleCtx)
 	}
 	return runtime, nil
 }
@@ -158,32 +195,6 @@ func (r *Runtime) ID() string {
 func (r *Runtime) Validate(ctx context.Context) error {
 	_, err := r.Invoke(ctx, switchboard.Request{Method: http.MethodGet, Path: "/__switchboard_validate", Headers: map[string][]string{}})
 	return err
-}
-
-func (r *Runtime) PoolSize() int {
-	if r == nil || r.pool == nil {
-		return 0
-	}
-	return cap(r.pool)
-}
-
-func (r *Runtime) Warm(ctx context.Context, count int) error {
-	if r.closed.Load() {
-		return fmt.Errorf("runtime %s is closed", r.id)
-	}
-	for i := 0; i < count; i++ {
-		mod, err := r.wasmRuntime.InstantiateModule(ctx, r.module, wazero.NewModuleConfig().WithName("").WithStartFunctions())
-		if err != nil {
-			return err
-		}
-		select {
-		case r.pool <- mod:
-		default:
-			_ = mod.Close(ctx)
-			return nil
-		}
-	}
-	return nil
 }
 
 func (r *Runtime) Invoke(ctx context.Context, req switchboard.Request) (switchboard.Action, error) {
@@ -231,41 +242,18 @@ func (r *Runtime) Invoke(ctx context.Context, req switchboard.Request) (switchbo
 	return action, nil
 }
 
-func (r *Runtime) acquireModule(ctx context.Context) (api.Module, error) {
-	if r.closed.Load() {
-		return nil, fmt.Errorf("runtime %s is closed", r.id)
-	}
-	select {
-	case mod := <-r.pool:
-		return mod, nil
-	default:
-		return nil, ErrRuntimePoolExhausted
-	}
-}
-
-func (r *Runtime) releaseModule(ctx context.Context, mod api.Module, healthy bool) {
-	if mod == nil {
-		return
-	}
-	if !healthy || r.closed.Load() {
-		_ = mod.Close(ctx)
-		return
-	}
-	select {
-	case r.pool <- mod:
-	default:
-		_ = mod.Close(ctx)
-	}
-}
-
 func (r *Runtime) Close(ctx context.Context) error {
 	if r == nil || r.closed.Swap(true) {
 		return nil
+	}
+	if r.scaleCancel != nil {
+		r.scaleCancel()
 	}
 	for {
 		select {
 		case mod := <-r.pool:
 			_ = mod.Close(ctx)
+			r.totalInstances.Add(-1)
 		default:
 			return r.module.Close(ctx)
 		}
