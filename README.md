@@ -344,8 +344,6 @@ Local in-process benchmarks on an Apple M4 Pro with CLI-built optimized artifact
 
 The hot path does not download, compile, or instantiate Wasm. The remaining cost is mostly rule execution and ABI calls. The ABI reads request fields lazily and writes action patches through host calls, so "continue unchanged" and "set one header" avoid serializing the full request or action.
 
-Docker e2e HTTP numbers are useful only as a directional smoke test. Sequential local pass-through landed in the same millisecond range as stock Caddy proxying to the same Python backend, but production latency depends on host, pool sizing, traffic shape, rule complexity, TinyGo flags, and memory pressure.
-
 ## Prior Art
 
 Switchboard borrows architectural lessons from Railway's Hikari CDN writeup: keep the host dataplane stable, move request policy into versioned guests, reconcile toward desired state, validate candidates off-path, and activate with an atomic swap. See [Railway's Hikari CDN architecture](https://blog.railway.com/p/railway-cdn).
