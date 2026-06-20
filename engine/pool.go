@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tetratelabs/wazero"
-	"github.com/tetratelabs/wazero/api"
 	"go.uber.org/zap"
 )
 
@@ -45,7 +43,7 @@ func (r *Runtime) Warm(ctx context.Context, count int) error {
 		return fmt.Errorf("runtime %s is closed", r.id)
 	}
 	for i := 0; i < count; i++ {
-		mod, err := r.wasmRuntime.InstantiateModule(ctx, r.module, wazero.NewModuleConfig().WithName("").WithStartFunctions())
+		mod, err := r.module.Instantiate(ctx)
 		if err != nil {
 			return err
 		}
@@ -60,7 +58,7 @@ func (r *Runtime) Warm(ctx context.Context, count int) error {
 	return nil
 }
 
-func (r *Runtime) acquireModule(ctx context.Context) (api.Module, error) {
+func (r *Runtime) acquireModule(ctx context.Context) (RuleInstance, error) {
 	if r.closed.Load() {
 		return nil, fmt.Errorf("runtime %s is closed", r.id)
 	}
@@ -82,7 +80,7 @@ func (r *Runtime) acquireModule(ctx context.Context) (api.Module, error) {
 	}
 }
 
-func (r *Runtime) releaseModule(ctx context.Context, mod api.Module, healthy bool) {
+func (r *Runtime) releaseModule(ctx context.Context, mod RuleInstance, healthy bool) {
 	if mod == nil {
 		return
 	}
@@ -181,7 +179,7 @@ func (r *Runtime) adjustPool(ctx context.Context) {
 
 func (r *Runtime) warmToTarget(ctx context.Context) {
 	for !r.closed.Load() && int(r.totalInstances.Load()) < int(r.targetPoolSize.Load()) {
-		mod, err := r.wasmRuntime.InstantiateModule(ctx, r.module, wazero.NewModuleConfig().WithName("").WithStartFunctions())
+		mod, err := r.module.Instantiate(ctx)
 		if err != nil {
 			r.log().Warn("failed to warm switchboard runtime pool instance", zap.String("bundle_id", r.id), zap.Error(err))
 			return

@@ -88,6 +88,16 @@ switchboard dist
 
 `build` runs `go mod tidy` before invoking TinyGo so the generated SDK import is resolved. Use `--skip-tidy` in locked-down CI after dependencies are already pinned.
 
+Rule builds default to a speed-oriented TinyGo profile:
+
+```text
+-opt=2 -panic=trap -no-debug
+```
+
+Use `--tinygo-opt`, `--tinygo-panic print`, or `--tinygo-debug` when you want a more debug-friendly artifact.
+
+Use `--wasm-opt` to run Binaryen's `wasm-opt` after TinyGo. In local testing this mainly reduced bundle size, so it is opt-in instead of part of the default latency path.
+
 Deploy the bundle:
 
 ```sh
@@ -334,11 +344,13 @@ GitHub Actions publishes the Caddy image from the checked-out source commit on p
 
 Switchboard optimizes for predictable request-path behavior rather than zero-cost rule execution. Bundles are reconciled, compiled, warmed, and validated off-path; request handling borrows an already-warmed Wasm instance from the active runtime pool.
 
-Local benchmarks on a warmed pool show no-op and simple block rules around 14 us/op in-process. In the Docker e2e workspace, sequential local HTTP pass-through was in the same millisecond range as stock Caddy reverse proxying to the same Python backend. These numbers are directional, not production guarantees; real latency depends on host, pool sizing, traffic shape, rule complexity, and backend behavior.
+Local benchmarks on an Apple M4 Pro with CLI-built optimized artifacts show warmed simple block rules around 6.9 us/op in-process. Header-rich rules that return mutated headers are more expensive because both the host and TinyGo guest encode/decode more JSON; optimized local runs are around 29-30 us/op. The HTTP adapter passes request headers into the engine without copying, so request conversion itself is zero-allocation. In the Docker e2e workspace, sequential local HTTP pass-through was in the same millisecond range as stock Caddy reverse proxying to the same Python backend. These numbers are directional, not production guarantees; real latency depends on host, pool sizing, traffic shape, rule complexity, TinyGo flags, and memory pressure.
 
 ## Prior Art
 
 Switchboard borrows architectural lessons from Railway's Hikari CDN writeup: keep the host dataplane stable, move request policy into versioned guests, reconcile toward desired state, validate candidates off-path, and activate with an atomic swap. See [Railway's Hikari CDN architecture](https://blog.railway.com/p/railway-cdn).
+
+The Wasm runtime path also borrows lessons from Arcjet's production wazero writeups: precompile modules, avoid request-path instantiation, treat `wasm-opt` as a measured build-time tradeoff, and prefer deliberate data-shape changes over fragile parser tricks. See [Lessons from running WebAssembly in production with Go & wazero](https://blog.arcjet.com/lessons-from-running-webassembly-in-production-with-go-wazero/) and [Making Arcjet's Wasm bot detector smaller and faster](https://blog.arcjet.com/making-arcjets-wasm-bot-detector-smaller-and-faster/).
 
 ## TinyGo
 

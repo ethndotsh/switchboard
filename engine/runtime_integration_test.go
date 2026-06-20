@@ -103,6 +103,10 @@ func loadRuntimeForTest(t testing.TB, poolSize int) (*Runtime, context.Context, 
 }
 
 func loadRuntimeForTestWithPoolConfig(t testing.TB, poolCfg PoolConfig) (*Runtime, context.Context, func()) {
+	return loadRuntimeForTestWithBackend(t, NewWasmRuntime, poolCfg)
+}
+
+func loadRuntimeForTestWithBackend(t testing.TB, newRuntime func(context.Context) (WasmRuntime, error), poolCfg PoolConfig) (*Runtime, context.Context, func()) {
 	t.Helper()
 	dist := filepath.Join("..", "dist")
 	module, err := os.ReadFile(filepath.Join(dist, "module.wasm"))
@@ -130,7 +134,7 @@ func loadRuntimeForTestWithPoolConfig(t testing.TB, poolCfg PoolConfig) (*Runtim
 	}
 
 	ctx := context.Background()
-	wasmRuntime, err := NewWasmRuntime(ctx)
+	wasmRuntime, err := newRuntime(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,14 +8,10 @@ import (
 )
 
 func RequestFromHTTP(r *http.Request) switchboard.Request {
-	headers := make(map[string][]string, len(r.Header))
-	for key, values := range r.Header {
-		headers[key] = append([]string(nil), values...)
-	}
 	return switchboard.Request{
 		Method:  r.Method,
 		Path:    r.URL.Path,
-		Headers: headers,
+		Headers: r.Header,
 	}
 }
 

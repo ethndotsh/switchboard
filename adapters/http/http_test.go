@@ -8,6 +8,41 @@ import (
 	"github.com/ethndotsh/switchboard"
 )
 
+var benchmarkRequest switchboard.Request
+
+func TestRequestFromHTTPUsesRequestHeaderMap(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/path", nil)
+	req.Header.Set("x-test", "1")
+
+	got := RequestFromHTTP(req)
+	if got.Method != http.MethodGet || got.Path != "/path" {
+		t.Fatalf("request = %#v", got)
+	}
+	got.Headers["X-Test"] = []string{"2"}
+	if req.Header.Get("x-test") != "2" {
+		t.Fatalf("expected request headers to be reused")
+	}
+}
+
+func BenchmarkRequestFromHTTP(b *testing.B) {
+	req := httptest.NewRequest(http.MethodGet, "/path", nil)
+	req.Header = http.Header{
+		"Accept":            {"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+		"Accept-Encoding":   {"gzip, deflate, br"},
+		"Accept-Language":   {"en-US,en;q=0.9"},
+		"Cache-Control":     {"no-cache"},
+		"User-Agent":        {"switchboard-benchmark/1.0"},
+		"X-Forwarded-For":   {"203.0.113.10"},
+		"X-Forwarded-Host":  {"example.com"},
+		"X-Forwarded-Proto": {"https"},
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		benchmarkRequest = RequestFromHTTP(req)
+	}
+}
+
 func TestApplyActionNextAndHeaders(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	res := httptest.NewRecorder()
