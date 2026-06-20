@@ -8,6 +8,10 @@ Switchboard keeps the long-lived dataplane stable, moves fast-changing request p
 
 Rule deployments do not restart the proxy. Bundles are downloaded, verified, compiled, warmed, and validated off the request path, then activated with an atomic swap. In-flight requests continue using the runtime version they started with. If activation fails, the last known-good version remains active.
 
+## Architecture
+
+![Switchboard architecture](docs/switchboard-arch-diagram.png)
+
 ## Shape
 
 - Caddy handler module: `http.handlers.switchboard`
