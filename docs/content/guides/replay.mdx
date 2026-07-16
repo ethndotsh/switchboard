@@ -13,7 +13,7 @@ Because rules have no body access, no external calls, and no mutable state, a de
 
 Replay consumes Caddy JSON access logs (the standard `format json` output). Any log stream that includes method, host, path, query, and headers works:
 
-```caddyfile
+```nginx Caddyfile
 example.com {
 	log {
 		output file /var/log/caddy/access.jsonl
@@ -33,7 +33,7 @@ switchboard replay ./access.jsonl \
   --candidate ./dist
 ```
 
-```txt
+```txt Replay report
 Requests processed:     12492104
 Changed decisions:      8331
 New denials:            17

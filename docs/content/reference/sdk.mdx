@@ -3,13 +3,13 @@ title: SDK
 description: "The github.com/ethndotsh/switchboard/sdk package: request accessors, action constructors, builders, and Chain."
 ---
 
-```go
+```go Import
 import "github.com/ethndotsh/switchboard/sdk"
 ```
 
 A rule exports one function with this signature; `switchboard build` generates the Wasm wrapper:
 
-```go
+```go Rule signature
 func Handle(req sdk.Request) sdk.Action
 ```
 
@@ -79,7 +79,7 @@ Header operations count against `max_header_ops`, and all emitted strings count 
 
 ## sdk.Chain
 
-```go
+```go rule.go
 func Handle(req sdk.Request) sdk.Action {
 	return sdk.Chain(req,
 		BlockInternalPaths,
@@ -95,7 +95,7 @@ Runs each `func(sdk.Request) sdk.Action` in order. `Next()` results accumulate t
 
 The SDK doubles as a plain Go library for unit tests: `sdk.NewRequest(data)` builds a populated request from an `sdk.RequestData` literal, so rule functions can be tested with `go test` before ever compiling to Wasm:
 
-```go
+```go rule_test.go
 func TestHandle(t *testing.T) {
 	req := sdk.NewRequest(sdk.RequestData{Method: "GET", Path: "/blocked"})
 	action := Handle(req)

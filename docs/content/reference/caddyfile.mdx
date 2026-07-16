@@ -7,7 +7,7 @@ sidebar:
 
 The `switchboard` handler (module ID `http.handlers.switchboard`) accepts these directives inside its block. Every directive is optional except `registry` and `channel` in practice; see [Caddy integration](/guides/caddy) for working configs.
 
-```caddyfile
+```nginx Caddyfile lineNumbers
 switchboard {
 	registry s3 s3://rules/prod
 	namespace customer-a

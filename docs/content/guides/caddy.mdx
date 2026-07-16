@@ -34,7 +34,7 @@ Caddy is Switchboard's reference adapter. The handler module registers as `http.
 
 ## Minimal Caddyfile
 
-```caddyfile
+```nginx Caddyfile
 :8080 {
 	route {
 		switchboard {
@@ -51,7 +51,7 @@ The handler runs your rule on every request and applies the resulting action (de
 
 ## A production-shaped config
 
-```caddyfile
+```nginx Caddyfile lineNumbers
 :8080 {
 	route {
 		switchboard {
@@ -61,8 +61,8 @@ The handler runs your rule on every request and applies the resulting action (de
 			poll_interval 2s
 			invoke_timeout 50ms
 			memory_limit 32mb
-			cache_dir /var/lib/switchboard
-			fail_mode last_good
+			cache_dir /var/lib/switchboard # [!code highlight]
+			fail_mode last_good # [!code highlight]
 			fallback_fail_mode open
 			pool_autoscale on
 			min_pool_size 16
@@ -89,7 +89,8 @@ Every request's decision, reason, and bundle ID land in Caddy's access logs and 
 
 `SetMetadata` values become Caddy request variables, which means a rule can pick backends without implementing any proxying. Switchboard emits the decision; native Caddy modules act on it:
 
-```go
+```go rule.go
+// [!code word:backend]
 func Handle(req sdk.Request) sdk.Action {
 	if bucket(req.Cookie("user_id")) < 10 {
 		return sdk.Next().SetMetadata("backend", "v2").WithReason("v2-canary")
@@ -98,7 +99,7 @@ func Handle(req sdk.Request) sdk.Action {
 }
 ```
 
-```caddyfile
+```nginx Caddyfile
 example.com {
 	route {
 		switchboard {
@@ -106,7 +107,7 @@ example.com {
 			channel prod
 		}
 
-		@v2 vars backend v2
+		@v2 vars backend v2 # [!code highlight]
 		reverse_proxy @v2 app-v2:8080
 		reverse_proxy app-v1:8080
 	}

@@ -5,7 +5,7 @@ description: "The Go SDK: reading requests, returning actions, patching headers,
 
 A rule is a plain Go package exporting one function:
 
-```go
+```go rule.go
 package myrule
 
 import "github.com/ethndotsh/switchboard/sdk"
@@ -21,7 +21,7 @@ func Handle(req sdk.Request) sdk.Action {
 
 `sdk.Request` exposes read accessors; each one fetches only what it asks for, so cheap rules stay cheap:
 
-```go
+```go Request accessors
 req.Method()              // "GET"
 req.Path()                // "/admin/users"
 req.Host()                // "example.com"
@@ -48,7 +48,7 @@ Five constructors cover every decision:
 
 Every action supports chainable builders:
 
-```go
+```go Chainable builders
 return sdk.Next().
 	SetRequestHeader("x-tenant", tenant).       // mutate the upstream request
 	SetResponseHeader("x-frame-options", "DENY"). // mutate the client response
@@ -67,7 +67,7 @@ Always attach a `WithReason`. Reasons surface in access logs, `switchboard eval`
 
 `sdk.Chain` runs rules in order, threading the request through each:
 
-```go
+```go rule.go
 func Handle(req sdk.Request) sdk.Action {
 	return sdk.Chain(req,
 		BlockInternalPaths,
@@ -89,7 +89,7 @@ This keeps each concern in its own small, individually testable function.
 
 ### Auth gate
 
-```go
+```go rule.go
 func Handle(req sdk.Request) sdk.Action {
 	if strings.HasPrefix(req.Path(), "/admin") && req.Header("x-user-role") != "admin" {
 		return sdk.Deny(401).WithReason("admin-auth-required")
@@ -100,7 +100,7 @@ func Handle(req sdk.Request) sdk.Action {
 
 ### Redirect map
 
-```go
+```go rule.go
 var legacy = map[string]string{
 	"/old-pricing": "/pricing",
 	"/docs/v1":     "/docs",
@@ -116,7 +116,7 @@ func Handle(req sdk.Request) sdk.Action {
 
 ### Maintenance mode
 
-```go
+```go rule.go
 func Handle(req sdk.Request) sdk.Action {
 	if req.Path() == "/health" {
 		return sdk.Next()
@@ -131,7 +131,7 @@ func Handle(req sdk.Request) sdk.Action {
 
 Rules don't proxy; they *decide*. `SetMetadata` hands the decision to the surrounding proxy, which routes on it; see [Caddy integration](/guides/caddy#routing-on-rule-metadata) for the full canary example:
 
-```go
+```go rule.go
 func Handle(req sdk.Request) sdk.Action {
 	if bucket(req.Cookie("user_id")) < 10 {
 		return sdk.Next().SetMetadata("backend", "v2").WithReason("v2-canary")

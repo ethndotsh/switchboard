@@ -1,3 +1,45 @@
+/* Blume's code-block header (language/title bar + icon) is prose-scoped, so it
+   vanishes on fences nested inside not-prose component wrappers like Steps and
+   Tabs. Restore the same header there. */
+.prose .not-prose pre[data-language] {
+  padding-top: 3.75rem;
+}
+
+.prose .not-prose pre[data-language]::before {
+  align-items: center;
+  border-bottom: 1px solid var(--blume-border);
+  color: var(--blume-muted-foreground);
+  content: attr(data-language);
+  display: flex;
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 500;
+  height: 2.75rem;
+  left: 0;
+  padding: 0 3.25rem 0 1rem;
+  position: absolute;
+  right: 0;
+  top: 0;
+}
+
+.prose .not-prose pre[data-title]::before {
+  content: attr(data-title);
+}
+
+.prose .not-prose pre[data-language][data-icon] > .blume-lang-icon {
+  color: var(--blume-muted-foreground);
+  display: block;
+  height: 0.875rem;
+  left: 1rem;
+  position: absolute;
+  top: 0.875rem;
+  width: 0.875rem;
+}
+
+.prose .not-prose pre[data-language][data-icon]::before {
+  padding-left: 2.5rem;
+}
+
 /* Badges rendered inside headings: use the body font and center on the cap height. */
 :is(h1, h2, h3, h4, h5, h6) span.not-prose.inline-flex {
   font-family: var(--blume-font-body);

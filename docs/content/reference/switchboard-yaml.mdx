@@ -32,7 +32,7 @@ registry: file://./registry
 
 Environment variables are expanded **before** the YAML is parsed, in all of these forms:
 
-```yaml
+```yaml switchboard.yaml
 registry: s3://rules/${ENVIRONMENT}
 channel: ${CHANNEL:-prod}        # fallback when unset or empty
 namespace: ${TENANT-shared}      # fallback when unset

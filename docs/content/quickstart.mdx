@@ -76,7 +76,7 @@ go install github.com/ethndotsh/switchboard/cmd/switchboard@latest
     switchboard eval --method GET --path /blocked
     ```
 
-    ```txt
+    ```txt Output
     decision:  deny
     reason:    blocked-path
     status:    403
@@ -109,7 +109,20 @@ go install github.com/ethndotsh/switchboard/cmd/switchboard@latest
   </Step>
   <Step title="Change the rule live">
 
-    Edit `rules/basic/rule.go`, then:
+    Edit `rules/basic/rule.go` — say, block another path:
+
+    ```go rules/basic/rule.go
+    func Handle(req sdk.Request) sdk.Action {
+    	if req.Path() == "/blocked" {
+    		return sdk.Deny(403).WithReason("blocked-path")
+    	}
+    	if req.Path() == "/internal" { // [!code ++]
+    		return sdk.Deny(404).WithReason("internal-path") // [!code ++]
+    	} // [!code ++]
+
+    	return sdk.Next().SetRequestHeader("x-powered-by", "switchboard")
+    }
+    ```
 
     ```sh
     switchboard build && switchboard deploy

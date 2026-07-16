@@ -54,7 +54,7 @@ Relative forms (`./registry`) work too. File registries support the full read-wr
 
 Any static origin that serves the registry layout (an object-store website endpoint, or a CDN in front of it) works as a **read-only** registry for proxies:
 
-```caddyfile
+```nginx Caddyfile
 switchboard {
 	registry https https://rules-cdn.example.com/registry
 	channel prod

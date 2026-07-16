@@ -10,7 +10,7 @@ Switchboard lets you change what your reverse proxy does to requests (block, red
 
 You write request rules as plain Go, compile them to WebAssembly with TinyGo, and push them to a registry as immutable, content-addressed bundles. Every proxy instance polls a **channel pointer** and hot-swaps the active rule in the background. The long-lived dataplane stays stable; the fast-changing request policy lives in small, versioned Wasm guests.
 
-```go
+```go rule.go
 func Handle(req sdk.Request) sdk.Action {
 	if req.Path() == "/blocked" {
 		return sdk.Deny(403).WithReason("blocked-path")
