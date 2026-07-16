@@ -2,6 +2,7 @@
   "name": "switchboard-docs",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.5.0",
   "scripts": {
     "dev": "blume dev",
     "build": "blume build",
