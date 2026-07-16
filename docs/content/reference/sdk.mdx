@@ -1,0 +1,112 @@
+---
+title: SDK
+description: "The github.com/ethndotsh/switchboard/sdk package: request accessors, action constructors, builders, and Chain."
+---
+
+```go
+import "github.com/ethndotsh/switchboard/sdk"
+```
+
+A rule exports one function with this signature; `switchboard build` generates the Wasm wrapper:
+
+```go
+func Handle(req sdk.Request) sdk.Action
+```
+
+## sdk.Request
+
+Read accessors. Inside the proxy these are lazy host calls; a rule pays only for the fields it reads.
+
+| Method | Returns | Notes |
+| --- | --- | --- |
+| `Method()` | `string` | HTTP method. |
+| `Path()` | `string` | URL path. Reflects earlier rewrites in a [chain](#sdkchain). |
+| `Host()` | `string` | Request host. |
+| `RawQuery()` | `string` | Raw query string, without `?`. |
+| `Query(name)` | `string` | One decoded query parameter. |
+| `Scheme()` | `string` | `http` or `https`. |
+| `Protocol()` | `string` | e.g. `HTTP/2.0`. |
+| `RemoteAddr()` | `string` | Peer address as connected. |
+| `ClientIP()` | `string` | Adapter-resolved client IP; honors Caddy `trusted_proxies`. |
+| `TLS()` | `bool` | Whether the request arrived over TLS. |
+| `Header(name)` | `string` | First value, case-insensitive. Empty string when absent. |
+| `HeaderValues(name)` | `[]string` | All values for a header. |
+| `Cookie(name)` | `string` | One cookie value. |
+
+## Action constructors
+
+| Constructor | Decision | Default status |
+| --- | --- | --- |
+| `sdk.Next()` | continue to the next handler / upstream | — |
+| `sdk.Deny(status)` | reject the request | `403` when `status` is 0 |
+| `sdk.Redirect(status, location)` | redirect the client | `302` when `status` is 0 |
+| `sdk.Rewrite(path)` | rewrite the path, then continue | — |
+| `sdk.Respond(status, body)` | serve a synthetic response | `200` when `status` is 0 |
+
+Redirect statuses must be 300–399; all statuses must be 100–599 ([validated on emit](/concepts/reliability#output-validation)).
+
+## Builders
+
+All builders return the modified `Action`, so they chain. They can be attached to any constructor.
+
+### Request patch: mutate what the upstream sees
+
+| Method | Effect |
+| --- | --- |
+| `SetRequestHeader(name, value)` | Set (replace) a request header. |
+| `AddRequestHeader(name, value)` | Append a request header value. |
+| `DeleteRequestHeader(name)` | Remove a request header. |
+| `RewriteHost(host)` | Change the request host. |
+| `RewritePath(path)` | Change the request path (must start with `/`). |
+| `RewriteQuery(query)` | Replace the raw query string. |
+
+### Response: mutate what the client sees
+
+| Method | Effect |
+| --- | --- |
+| `SetResponseHeader(name, value)` | Set (replace) a response header. |
+| `AddResponseHeader(name, value)` | Append a response header value. |
+| `DeleteResponseHeader(name)` | Remove a response header. |
+
+### Annotations
+
+| Method | Effect |
+| --- | --- |
+| `WithReason(reason)` | Label the decision. Surfaces in access logs, test output, `eval`, and replay diffs. |
+| `SetMetadata(name, value)` | Expose a key/value to the surrounding proxy as Caddy request variables, usable for [routing](/guides/caddy#routing-on-rule-metadata). |
+
+Header operations count against `max_header_ops`, and all emitted strings count against `max_action_bytes`; see [execution limits](/concepts/reliability#execution-limits).
+
+## sdk.Chain
+
+```go
+func Handle(req sdk.Request) sdk.Action {
+	return sdk.Chain(req,
+		BlockInternalPaths,
+		RewriteLegacyPaths,
+		AddRuleHeader,
+	)
+}
+```
+
+Runs each `func(sdk.Request) sdk.Action` in order. `Next()` results accumulate their request patch, response headers, metadata, and reason; later rules observe the request as rewritten so far. The first `Deny`, `Redirect`, or `Respond` short-circuits with all accumulated state. See [Writing rules](/guides/writing-rules#composing-with-chains).
+
+## Host-side testing
+
+The SDK doubles as a plain Go library for unit tests: `sdk.NewRequest(data)` builds a populated request from an `sdk.RequestData` literal, so rule functions can be tested with `go test` before ever compiling to Wasm:
+
+```go
+func TestHandle(t *testing.T) {
+	req := sdk.NewRequest(sdk.RequestData{Method: "GET", Path: "/blocked"})
+	action := Handle(req)
+	if action.Decision != sdk.DecisionDeny {
+		t.Fatalf("want deny, got %s", action.Decision)
+	}
+}
+```
+
+Decision constants: `DecisionNext`, `DecisionDeny`, `DecisionRedirect`, `DecisionRewrite`, `DecisionRespond`.
+
+## ABI
+
+The SDK targets the `switchboard/v3` host-function ABI, recorded in each bundle's [descriptor](/reference/bundle-format). Request-header and response-header operations are explicitly separate; the v2 API where one operation meant different things per action is gone.

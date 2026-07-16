@@ -1,0 +1,70 @@
+---
+title: Replaying production traffic
+description: Feed captured Caddy access logs through two bundles and diff every decision before you deploy.
+sidebar:
+  label: Replay
+---
+
+`switchboard replay` answers the question every risky rule change raises: *what would this actually have done to yesterday's traffic?*
+
+Because rules have no body access, no external calls, and no mutable state, a decision is a pure function of the request, so replaying captured logs reproduces production decisions **exactly**, offline, without touching production.
+
+## Capturing logs
+
+Replay consumes Caddy JSON access logs (the standard `format json` output). Any log stream that includes method, host, path, query, and headers works:
+
+```caddyfile
+example.com {
+	log {
+		output file /var/log/caddy/access.jsonl
+		format json
+	}
+	# ...
+}
+```
+
+## Diffing two bundles
+
+Point replay at a log file, the currently deployed bundle, and your candidate:
+
+```sh
+switchboard replay ./access.jsonl \
+  --current prod \
+  --candidate ./dist
+```
+
+```txt
+Requests processed:     12492104
+Changed decisions:      8331
+New denials:            17
+Changed rewrites:       6992
+Candidate errors:       0
+Candidate p99 exec:     8.1 us
+```
+
+Both refs accept a dist directory, a channel name, or a bundle ID, so you can also diff `staging` against `prod`, or two historical bundles against each other. Memory stays bounded regardless of log size; replay streams, it doesn't load.
+
+## Reading the report
+
+- **Changed decisions**: every request where the candidate chose differently (different action, status, location, rewrite, or reason).
+- **New denials**: requests the current bundle allows that the candidate would deny. This is the number to stare at before deploying an auth or blocking change.
+- **Candidate errors**: traps, timeouts, or invalid actions. Should be zero; anything else means the candidate would burn your `fail_mode` budget in production.
+- **Candidate p99 exec**: execution latency percentile over the replayed traffic, so a performance regression shows up here rather than on the edge.
+
+Add `--verbose` to stream every individual difference as it's found, and `--json` for a machine-readable report.
+
+## Gating CI on replay
+
+Two flags turn replay into a merge gate:
+
+```sh
+switchboard replay ./access-sample.jsonl \
+  --current prod \
+  --candidate ./dist \
+  --fail-on-new-denials     # exit non-zero if the candidate denies anything prod allows
+```
+
+- `--fail-on-new-denials` is the safety gate: block changes that would start rejecting traffic, while still allowing intentional decision changes.
+- `--fail-on-change` is the strict gate: any changed decision fails. Use it for refactors that should be behavior-preserving.
+
+A practical pipeline: `switchboard build`, `switchboard test`, then replay a recent traffic sample with `--fail-on-new-denials`, and only then [deploy to staging](/guides/deploying).

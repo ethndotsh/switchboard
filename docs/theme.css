@@ -1,0 +1,9 @@
+/* Badges rendered inside headings: use the body font and center on the cap height. */
+:is(h1, h2, h3, h4, h5, h6) span.not-prose.inline-flex {
+  font-family: var(--blume-font-body);
+  font-weight: 500;
+  letter-spacing: normal;
+  vertical-align: middle;
+  transform: translateY(-0.08em);
+  margin-inline-start: 0.375rem;
+}

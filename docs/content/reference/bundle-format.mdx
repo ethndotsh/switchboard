@@ -1,0 +1,72 @@
+---
+title: Bundle format
+description: The switchboard.descriptor/v1 descriptor, the identity zone, and the on-registry object layout.
+---
+
+A bundle is a directory of artifacts described by a `descriptor.json` with schema `switchboard.descriptor/v1`.
+
+## descriptor.json
+
+```json descriptor.json
+{
+  "schema": "switchboard.descriptor/v1",
+  "abi": "switchboard/v3",
+  "manifest": {
+    "name": "my-rules",
+    "abi": "switchboard/v3",
+    "entrypoint": "handle",
+    "language": "go-tinygo"
+  },
+  "artifacts": {
+    "module.wasm": { "digest": "sha256:…", "size": 30762 },
+    "tests.yaml": { "digest": "sha256:…", "size": 372 }
+  },
+  "provenance": {
+    "built_at": "2026-07-16T14:02:58Z",
+    "builder": "switchboard/0.1.0 tinygo/0.41.1",
+    "source_commit": "9f31c2e…"
+  },
+  "signatures": []
+}
+```
+
+| Field | In identity | Description |
+| --- | --- | --- |
+| `schema` | yes | Descriptor schema version. |
+| `abi` | yes | Host-function ABI the module targets (`switchboard/v3`). |
+| `manifest` | yes | Bundle name, ABI, entrypoint export, source language. |
+| `artifacts` | yes | Digest and size of every artifact in the bundle. |
+| `provenance` | no | Build time, builder version, source commit. Annotation only. |
+| `signatures` | no | Reserved for future bundle signing (Ed25519/Sigstore planned). |
+
+## Bundle identity
+
+The **bundle ID** is `sha256-<hex>` computed over the canonical JSON of the *identity zone*: `schema`, `abi`, `manifest`, and `artifacts`.
+
+Because provenance and signatures sit outside the identity zone:
+
+- Byte-identical rebuilds produce the same ID, so re-deploying unchanged content **skips the upload entirely**.
+- Signing or annotating a bundle later never changes what it is.
+
+Every registry verifies, on both upload and download, that each artifact matches its declared digest **and** that the stored bundle ID matches the descriptor-derived ID. Corruption and tampering fail closed, before activation.
+
+## On-registry layout
+
+```txt
+channels/prod.json
+revisions/prod/0000000041.json
+revisions/prod/0000000042.json
+bundles/sha256-<digest>/module.wasm
+bundles/sha256-<digest>/manifest.json
+bundles/sha256-<digest>/tests.yaml
+bundles/sha256-<digest>/checksum.txt
+bundles/sha256-<digest>/descriptor.json
+```
+
+With a [namespace](/concepts/bundles-and-channels#namespaces), everything nests under `namespaces/<name>/…`.
+
+## Compatibility
+
+- `checksum.txt` (a module-only digest) is still written and verified for compatibility, but `descriptor.json` is authoritative.
+- Legacy bundles without a descriptor still load, with a warning.
+- Proxies refuse bundles whose `abi` they don't support.

@@ -1,0 +1,78 @@
+---
+title: Caddyfile directives
+description: Every directive of the switchboard handler block, with defaults.
+sidebar:
+  label: Caddyfile
+---
+
+The `switchboard` handler (module ID `http.handlers.switchboard`) accepts these directives inside its block. Every directive is optional except `registry` and `channel` in practice; see [Caddy integration](/guides/caddy) for working configs.
+
+```caddyfile
+switchboard {
+	registry s3 s3://rules/prod
+	namespace customer-a
+	channel prod
+	poll_interval 2s
+	fail_mode last_good
+	fallback_fail_mode open
+	invoke_timeout 50ms
+	memory_limit 32mb
+	max_action_bytes 64kb
+	max_header_ops 32
+	max_response_body 8kb
+	cache_dir /var/lib/switchboard
+	bootstrap_from_cache on
+	pool_autoscale on
+	pool_size 16
+	min_pool_size 16
+	max_pool_size 64
+}
+```
+
+## Registry and channel
+
+| Directive | Default | Description |
+| --- | --- | --- |
+| `registry <kind> [url]` | — | Registry backend. `<kind>` is `s3`, `file`, or `https`; the optional URL (`s3://bucket/prefix`, `file:///path`, `https://host/base`) pins the location. With `s3` and no URL, the `SWITCHBOARD_S3_*` environment variables supply the endpoint and bucket. |
+| `namespace` | — | Tenant [namespace](/concepts/bundles-and-channels#namespaces). |
+| `channel` | `prod` | Channel to reconcile toward. |
+| `poll_interval` | `2s` | How often the reconciler checks the channel pointer. |
+
+## Failure policy
+
+| Directive | Default | Description |
+| --- | --- | --- |
+| `fail_mode` | `open` | What happens when the rule is unavailable: `open`, `closed`, or `last_good`. See [fail modes](/concepts/reliability#fail-modes). |
+| `fallback_fail_mode` | `open` | For `fail_mode last_good` only: `open` or `closed` after the last-good retry also fails. |
+
+## Execution limits
+
+All five are [hard bounds enforced per invocation](/concepts/reliability#execution-limits); violating actions are rejected, not clamped.
+
+| Directive | Default | Description |
+| --- | --- | --- |
+| `invoke_timeout` | `50ms` | Preemptive deadline on guest execution. |
+| `memory_limit` | `32mb` | Cap on guest linear memory. |
+| `max_action_bytes` | `64kb` | Quota over all guest-produced strings. |
+| `max_header_ops` | `32` | Request + response header operations combined. |
+| `max_response_body` | `8kb` | Maximum `Respond` body size. |
+
+## Cache
+
+| Directive | Default | Description |
+| --- | --- | --- |
+| `cache_dir` | — | Directory for the [durable last-known-good cache](/concepts/reliability#durable-last-known-good) and wazero's compilation cache. |
+| `bootstrap_from_cache` | `on` when `cache_dir` is set | Activate the cached bundle at startup before touching the registry (`on`/`off`). Requires `cache_dir`. |
+
+## Instance pool
+
+| Directive | Default | Description |
+| --- | --- | --- |
+| `pool_autoscale` | `on` | Autoscale warm instances with load (`on`/`off`). |
+| `pool_size` | `16` | Fixed pool size when autoscaling is off. |
+| `min_pool_size` | `16` | Autoscale floor. |
+| `max_pool_size` | `128` | Autoscale ceiling (must be ≥ `min_pool_size`). |
+
+## JSON config
+
+Every directive has a snake_case JSON counterpart under the handler object for native Caddy JSON configs, e.g. `{"handler": "switchboard", "registry": "s3", "registry_url": "s3://rules/prod", "channel": "prod"}`. The Go field names in `engine.Config` match one-to-one for [embedded use](/guides/standalone#embedding-in-a-go-server).

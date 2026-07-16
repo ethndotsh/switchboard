@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "skills": {
+    "blume": {
+      "source": "haydenbleasel/blume",
+      "sourceType": "github",
+      "skillPath": "skills/blume/SKILL.md",
+      "computedHash": "81f78ca5ba7a549291d8f4ea6b6e0b4e4df87634aa9a70288eb355813d483972"
+    },
+    "blume-migrate": {
+      "source": "haydenbleasel/blume",
+      "sourceType": "github",
+      "skillPath": "skills/blume-migrate/SKILL.md",
+      "computedHash": "378fcff39f2e8f969d040e960d6b44bf7217c7b497aba2f6bafdd338634f56f2"
+    },
+    "blume-update-docs": {
+      "source": "haydenbleasel/blume",
+      "sourceType": "github",
+      "skillPath": "skills/blume-update-docs/SKILL.md",
+      "computedHash": "0b49689a8d949583b7773b5914a219d5d998547a54143c3bf9532ede06b778df"
+    },
+    "documentation-writer": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "skillPath": "skills/documentation-writer/SKILL.md",
+      "computedHash": "ee53d65b163cd7eb953a930c95841cfe398cc2c0bd24c06508bbaa07c432be35"
+    }
+  }
+}

@@ -1,0 +1,81 @@
+---
+title: Testing rules
+description: Declare a behavioral contract in tests.yaml, run it with switchboard test, and poke at bundles with eval.
+---
+
+Every bundle can declare its behavioral contract in a `tests.yaml` next to the rule package. The suite is embedded in the bundle, hashed into its identity, and **re-run by every proxy before activation**, so tests aren't just a dev-time check; they're the deployment gate.
+
+## Declaring test cases
+
+```yaml rules/basic/tests.yaml
+schema: switchboard.tests/v1
+cases:
+  - name: blocks unauthenticated admin requests
+    request:
+      method: GET
+      host: example.com
+      path: /admin
+      headers:
+        x-user-role: viewer
+    expect:
+      action: deny
+      status: 401
+      reason: admin-auth-required
+
+  - name: permits health checks
+    request:
+      method: GET
+      path: /health
+    expect:
+      action: next
+```
+
+`expect` uses **partial matching**: only the fields you name are asserted. An `expect` with just `action: next` passes regardless of what headers the rule set; add `request_headers` when you want to pin those too. See the [test schema reference](/reference/tests) for every request and expect field.
+
+## Running the suite
+
+```sh
+switchboard build   # embeds tests.yaml into the bundle
+switchboard test    # runs the bundle against its embedded suite
+```
+
+`test` runs the *compiled Wasm bundle*, the same artifact that will ship, not the Go source. Useful flags:
+
+- `--cases other.yaml`: run a different suite against the bundle.
+- `--verbose`: list passing cases too.
+- `--json`: machine-readable report for CI.
+- You can also point `test` at a deployed channel or bundle ID instead of the local `./dist`.
+
+## One-off requests with `eval`
+
+`eval` runs a single request against a bundle and prints the decision. It's the fastest feedback loop while developing:
+
+```sh
+switchboard eval ./dist \
+  --method GET \
+  --host example.com \
+  --path /admin \
+  -H "x-user-role: viewer"
+```
+
+```txt
+decision:  deny
+reason:    admin-auth-required
+status:    401
+```
+
+Requests can carry `--method`, `--scheme`, `--host`, `--path`, `--query`, `--client-ip`, `--tls`, and repeated `-H "Name: value"` headers. `--json` prints the full action, including header patches and metadata.
+
+The positional ref is anything bundle-shaped: a dist directory (the default), a channel name, or a bundle ID, so you can also interrogate exactly what's live in production:
+
+```sh
+switchboard eval prod --path /admin -H "x-user-role: viewer"
+```
+
+## Why activation re-runs the tests
+
+Each proxy runs the embedded suite against the candidate runtime *inside the proxy that will serve it*, so passing means "this exact artifact honors its contract here", not "it passed on the laptop that built it". A failing bundle is [quarantined](/concepts/reliability#activation-gates) and the last known-good version keeps serving.
+
+## Testing against real traffic
+
+Synthetic cases can't cover everything your users actually send. For that, [replay captured access logs](/guides/replay) through the current and candidate bundles and diff every decision offline.

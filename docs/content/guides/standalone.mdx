@@ -1,0 +1,83 @@
+---
+title: Standalone & embedded
+description: Run switchboard serve as a single-binary proxy, or embed the engine as middleware in any Go HTTP server.
+---
+
+Caddy is the reference adapter, but the engine doesn't require it.
+
+## `switchboard serve`
+
+A single binary that reverse-proxies to one upstream with live rule reloads. It's ideal for local development, tests, and single-machine deployments:
+
+```sh
+switchboard serve \
+  --listen :8080 \
+  --upstream localhost:3000 \
+  --registry file://./registry \
+  --channel dev
+```
+
+It runs the same engine and reconciler as the Caddy module, and honors `--fail-mode` (`open`, `closed`, `last_good`) and `--cache-dir` for [durable last-known-good](/concepts/reliability#durable-last-known-good).
+
+Built-in endpoints:
+
+- `GET /switchboard/status`: reconciler and pool state as JSON.
+- `GET /metrics`: Prometheus metrics.
+
+:::tip
+Both are served on the main listener by default. Whenever the proxy is internet-facing, move them to a separate one with `--status-listen :9090`.
+:::
+
+All flags are in the [CLI reference](/reference/cli#serve).
+
+## Embedding in a Go server
+
+The same engine mounts as `net/http` middleware:
+
+```go
+package main
+
+import (
+	"context"
+	"net/http"
+
+	httpadapter "github.com/ethndotsh/switchboard/adapters/http"
+	"github.com/ethndotsh/switchboard/engine"
+)
+
+func main() {
+	ctx := context.Background()
+
+	service, err := engine.Start(ctx, engine.Config{
+		RegistryURL: "file://./registry",
+		Channel:     "dev",
+	}, logger)
+	if err != nil {
+		panic(err)
+	}
+	defer service.Close(ctx)
+
+	handler := httpadapter.Middleware(service, httpadapter.Options{
+		FailMode: "open",
+		Logger:   logger,
+	})
+
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: handler(application),
+	}
+	server.ListenAndServe()
+}
+```
+
+`engine.Config` accepts the same knobs as the Caddy directives: `Namespace`, `PollInterval`, `InvokeTimeout`, `MemoryLimit`, `CacheDir`, `FailMode`, pool sizing, and the rest. See the [Caddyfile reference](/reference/caddyfile) for meanings and defaults; the Go field names match.
+
+`service.Status()` returns the same structure as the `/switchboard/status` endpoint, so you can wire it into your own health and debug surfaces.
+
+## Which shape to pick
+
+| Shape | Reach for it when |
+| --- | --- |
+| Caddy module | You want TLS, HTTP/3, multiple upstreams, and rule-metadata routing; production edges. |
+| `switchboard serve` | Local development, integration tests, or a simple one-upstream proxy on a single machine. |
+| Embedded middleware | The "proxy" is your own Go service and you want deployable request policy in front of your handlers. |

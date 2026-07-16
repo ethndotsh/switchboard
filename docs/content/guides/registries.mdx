@@ -1,0 +1,72 @@
+---
+title: Registries
+description: "Choose and configure a registry backend: S3-compatible object storage, a local directory, or a read-only HTTPS origin."
+---
+
+The registry is where bundles, channel pointers, and revision history live. It's configured with a single URL, and the scheme picks the implementation:
+
+| Scheme | Read | Write | Revision serialization | Use for |
+| --- | --- | --- | --- | --- |
+| `s3://bucket/prefix` | yes | yes | conditional writes | production |
+| `file:///path`, `./path` | yes | yes | `O_EXCL` | local dev, tests, single machines |
+| `https://host/base` | yes | no | generation walk | read-only proxy fleets behind a CDN |
+
+The same URL works everywhere a registry is accepted: `switchboard.yaml`, CLI `--registry` flags, the Caddy `registry` directive, and `engine.Config`.
+
+## S3-compatible object storage
+
+The production backend: AWS S3, MinIO, Cloudflare R2, or anything speaking the S3 API. Credentials and endpoint come from environment variables:
+
+```sh
+SWITCHBOARD_S3_ENDPOINT=localhost:9000
+SWITCHBOARD_S3_ACCESS_KEY=minioadmin
+SWITCHBOARD_S3_SECRET_KEY=minioadmin
+SWITCHBOARD_S3_BUCKET=switchboard
+SWITCHBOARD_S3_INSECURE=true        # plain HTTP, for local MinIO
+```
+
+```sh
+switchboard deploy --registry s3://switchboard/rules
+```
+
+Concurrent deploys are serialized with conditional writes (`If-None-Match: *`), which MinIO and AWS S3 support natively; stores that reject conditional writes fall back to a stat-then-put emulation with a small race window.
+
+:::tip[Try it locally with MinIO]
+
+```sh
+docker run -p 9000:9000 minio/minio server /data
+```
+
+Then export the variables above and every command works exactly as it does against AWS.
+:::
+
+## Local `file://` registries
+
+Zero setup: a directory on disk with the same layout as a bucket. This is what the [quickstart](/quickstart) uses:
+
+```sh
+switchboard init --registry file://./registry
+```
+
+Relative forms (`./registry`) work too. File registries support the full read-write surface, so `deploy`, `history`, `rollback`, and `serve` all behave identically to S3. That makes integration tests against a temp directory trivial.
+
+## Read-only `https://` registries
+
+Any static origin that serves the registry layout (an object-store website endpoint, or a CDN in front of it) works as a **read-only** registry for proxies:
+
+```caddyfile
+switchboard {
+	registry https https://rules-cdn.example.com/registry
+	channel prod
+}
+```
+
+The pattern: CI deploys with write credentials over `s3://`, while the proxy fleet reads anonymously over `https://` through a CDN. Proxies get cheap, cacheable, scale-out reads (with ETag revalidation on the channel pointer) and hold **no storage credentials at all**. Revision history is discovered by walking generations, so `status` and `history` still work read-only.
+
+## Namespaces
+
+Every backend supports namespaces for tenant isolation: with `namespace: customer-a`, all objects nest under `namespaces/customer-a/…`. One bucket can serve many independent rule sets with separate channels and histories. Set it in `switchboard.yaml`, per-command with `--namespace`, or in the proxy config.
+
+## Registry unavailability
+
+Proxies don't need the registry at startup: construction is config-only, and unreachable stores surface as reconciler retries. With `cache_dir` set, the last activated bundle keeps serving from local disk even across restarts; see [durable last-known-good](/concepts/reliability#durable-last-known-good).

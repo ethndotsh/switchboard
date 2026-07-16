@@ -1,0 +1,88 @@
+---
+title: Test schema
+description: "The switchboard.tests/v1 schema: every request and expect field in tests.yaml."
+sidebar:
+  label: tests.yaml
+---
+
+Behavioral test suites use the `switchboard.tests/v1` schema. The file is picked up automatically next to the rule package (or set with `tests` in [`switchboard.yaml`](/reference/switchboard-yaml), or `--cases` on `build`/`test`), embedded in the bundle at build time, and re-run by every proxy before activation.
+
+```yaml tests.yaml
+schema: switchboard.tests/v1
+cases:
+  - name: blocks unauthenticated admin requests
+    request:
+      method: GET
+      host: example.com
+      path: /admin
+      headers:
+        x-user-role: viewer
+    expect:
+      action: deny
+      status: 401
+      reason: admin-auth-required
+```
+
+## Top level
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `schema` | yes | Must be `switchboard.tests/v1`. |
+| `cases` | yes | List of test cases; must be non-empty. |
+
+Each case has a `name`, a `request`, and an `expect`.
+
+## `request`
+
+The synthetic request handed to the rule. Every field is optional.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `method` | string | HTTP method (default `GET`). |
+| `scheme` | string | `http` or `https`. |
+| `host` | string | Request host. |
+| `path` | string | URL path. |
+| `query` | string | Raw query string. |
+| `client_ip` | string | Client IP as the proxy would resolve it. |
+| `tls` | bool | Whether the request is TLS. |
+| `headers` | map | Header name → value; a value may be a string or a list of strings for multi-value headers. |
+| `cookies` | map | Cookie name → value. |
+
+## `expect`
+
+Assertions on the action the rule returned. **Only the fields you name are asserted**; everything omitted is unconstrained.
+
+| Field | Type | Asserts |
+| --- | --- | --- |
+| `action` | string | The decision: `next`, `deny`, `redirect`, `rewrite`, or `respond`. |
+| `status` | int | Response status code. |
+| `reason` | string | The `WithReason` label. |
+| `location` | string | Redirect target. |
+| `rewrite_path` | string | Patched request path. |
+| `rewrite_host` | string | Patched request host. |
+| `rewrite_query` | string | Patched query string. |
+| `body_contains` | string | Substring of a `respond` body. |
+| `metadata` | map | Each named metadata key has the given value. |
+| `request_headers` | map | Each named request header ends up with the given value after the patch. |
+| `response_headers` | map | Each named response header ends up with the given value. |
+
+```yaml
+  - name: canary tags v2 users
+    request:
+      cookies:
+        user_id: "42"
+    expect:
+      action: next
+      metadata:
+        backend: v2
+      reason: v2-canary
+```
+
+## Where suites run
+
+| Runner | When |
+| --- | --- |
+| `switchboard test` | On demand, against any [ref](/reference/cli#bundle-refs). |
+| `switchboard build` | Embeds the suite; the suite hash is part of the bundle ID. |
+| `switchboard diff --tests` | Cross-runs each side's suite against the other bundle. |
+| Every proxy | Against the candidate runtime, [gating activation](/concepts/reliability#activation-gates). |
