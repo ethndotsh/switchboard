@@ -1,0 +1,160 @@
+---
+title: Quickstart
+description: Build, test, deploy, and serve your first Switchboard rule in five minutes, no object store required.
+sidebar:
+  label: Quickstart
+  order: 1
+---
+
+This tutorial takes you from an empty directory to a running proxy that hot-reloads your rule. It uses the `file://` registry, so there is nothing to provision.
+
+## Prerequisites
+
+- **Go 1.22+**: rules are plain Go packages.
+- **TinyGo**: compiles rules to WebAssembly. Install it from the [TinyGo guide](https://tinygo.org/getting-started/install/).
+- **The Switchboard CLI:**
+
+```sh
+go install github.com/ethndotsh/switchboard/cmd/switchboard@latest
+```
+
+## Build and deploy a rule
+
+<Steps>
+  <Step title="Scaffold a project">
+
+    `switchboard init` creates a rule project with a working rule, a test suite, and a config file:
+
+    ```sh
+    mkdir my-rules && cd my-rules
+    switchboard init --name my-rules --registry file://./registry
+    ```
+
+    <FileTree>
+
+    - go.mod
+    - switchboard.yaml
+    - rules/
+      - basic/
+        - rule.go
+        - tests.yaml
+
+    </FileTree>
+
+  </Step>
+  <Step title="Look at the rule">
+
+    A rule is one exported function. `switchboard build` generates the Wasm wrapper around it, so the package stays plain Go:
+
+    ```go rules/basic/rule.go
+    package basic
+
+    import "github.com/ethndotsh/switchboard/sdk"
+
+    func Handle(req sdk.Request) sdk.Action {
+    	if req.Path() == "/blocked" {
+    		return sdk.Deny(403).WithReason("blocked-path")
+    	}
+
+    	return sdk.Next().SetRequestHeader("x-powered-by", "switchboard")
+    }
+    ```
+
+  </Step>
+  <Step title="Build and test the bundle">
+
+    `build` compiles the rule with TinyGo and embeds `tests.yaml` into the bundle. `test` runs the bundle against its own behavioral contract:
+
+    ```sh
+    switchboard build
+    switchboard test
+    ```
+
+    You can also poke at it interactively with one-off requests:
+
+    ```sh
+    switchboard eval --method GET --path /blocked
+    ```
+
+    ```txt
+    decision:  deny
+    reason:    blocked-path
+    status:    403
+    ```
+
+  </Step>
+  <Step title="Deploy it">
+
+    `deploy` uploads the bundle to the registry and repoints the `prod` channel at it, recording an immutable revision:
+
+    ```sh
+    switchboard deploy
+    ```
+
+  </Step>
+  <Step title="Serve traffic through it">
+
+    Start the standalone proxy against any upstream (swap in whatever you have listening locally):
+
+    ```sh
+    switchboard serve --listen :8080 --upstream localhost:3000 \
+      --registry file://./registry --channel prod
+    ```
+
+    ```sh
+    curl -i localhost:8080/blocked      # 403 from your rule
+    curl -i localhost:8080/anything     # proxied, with x-powered-by: switchboard
+    ```
+
+  </Step>
+  <Step title="Change the rule live">
+
+    Edit `rules/basic/rule.go`, then:
+
+    ```sh
+    switchboard build && switchboard deploy
+    ```
+
+    Within the poll interval (2 seconds by default) the running proxy downloads, verifies, tests, and atomically activates the new bundle, with no restart. If you break something:
+
+    ```sh
+    switchboard rollback --channel prod
+    ```
+
+  </Step>
+</Steps>
+
+## Where the defaults came from
+
+`switchboard init` wrote a `switchboard.yaml` that every command reads its defaults from, so `build`, `deploy`, and friends work with no flags:
+
+```yaml switchboard.yaml
+name: my-rules
+rule: ./rules/basic
+dist: ./dist
+channel: prod
+registry: file://./registry
+```
+
+See the [configuration reference](/reference/switchboard-yaml) for every field.
+
+:::success
+That's the whole loop: edit, build, deploy, and the proxy hot-swaps your rule after it passes its own tests. Everything else in these docs is refinement.
+:::
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Writing rules" href="/guides/writing-rules" icon="pencil">
+    Actions, header patches, rewrites, and composing rules with chains.
+  </Card>
+  <Card title="Testing rules" href="/guides/testing" icon="flask-conical">
+    Behavioral test suites, `eval`, and replaying production traffic.
+  </Card>
+  <Card title="Caddy integration" href="/guides/caddy" icon="plug">
+    Run the same rules inside Caddy with the handler module.
+  </Card>
+  <Card title="Registries" href="/guides/registries" icon="database">
+    Move from `file://` to S3-compatible object storage.
+  </Card>
+</CardGroup>

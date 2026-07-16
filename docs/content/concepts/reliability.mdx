@@ -1,0 +1,67 @@
+---
+title: Security & reliability
+description: "The failure model: activation gates, quarantine, durable last-known-good, fail modes, and why a broken rule can't take the proxy down."
+---
+
+Switchboard's core promise is that the blast radius of a bad rule (buggy, slow, or malicious) is bounded, and the blast radius of a bad *deployment* is zero.
+
+## Activation gates
+
+A bundle is not "deployed" when it's uploaded; it's deployed when a proxy **activates** it, and activation has to earn its way through every gate:
+
+1. Every artifact digest verifies against the descriptor.
+2. The Wasm module compiles under wazero.
+3. The instance pool warms successfully.
+4. The bundle's **embedded test suite passes against the candidate runtime**: the exact artifact, on the exact runtime, in the exact proxy that will serve traffic.
+
+The test suite is hashed into the bundle's identity, so activation means "this artifact passed its declared behavioral contract here", not just "the module compiled."
+
+## Quarantine
+
+A bundle that fails any gate is **quarantined**: the proxy stops retrying it until the channel pointer changes. One broken deployment therefore cannot cause a compile-and-fail storm across a fleet; each instance tries once, quarantines, and keeps serving the previous rule. Transient registry failures are handled separately, with exponential backoff (1s doubling to 5 minutes, with jitter).
+
+## Durable last-known-good
+
+With `cache_dir` set, every successful activation is persisted to local disk (write, fsync, atomic rename). On startup the proxy verifies and activates the cached bundle **before** touching the registry, then reconciles in the background.
+
+The consequence: a machine that served a known-good bundle five seconds before a restart keeps serving it even if the object store is down. The registry being unreachable degrades to "no new deploys", never to "no policy". The same directory hosts wazero's compilation cache, so restarts skip recompiling unchanged modules.
+
+## Fail modes
+
+When a rule is unavailable at request time (no active runtime, pool exhausted, guest trap, timeout, or invalid action), the configured `fail_mode` decides what happens to the request:
+
+| Mode | Behavior |
+| --- | --- |
+| `open` (default) | The request continues to the next handler, un-ruled. |
+| `closed` | The request is rejected with a 503. |
+| `last_good` | Retry once on the previous runtime, then apply `fallback_fail_mode` (`open` or `closed`). |
+
+:::warning[The default is open]
+If the rule *is* your security boundary (an auth gate), set `fail_mode closed`; the default `open` lets requests through when the rule is unavailable. Use `open` when the rule is an optimization (header decoration, canary tagging), and `last_good` when the previous policy beats no policy.
+:::
+
+## Execution limits
+
+Guest execution is bounded on every axis, so a compromised or buggy rule cannot take the proxy down with it:
+
+| Limit | Default | Enforces |
+| --- | --- | --- |
+| `invoke_timeout` | 50ms | Real preemption: wazero is built with `WithCloseOnContextDone`, so a spinning guest is forcibly stopped at the deadline. |
+| `memory_limit` | 32mb | Hard cap on guest linear memory (Wasm pages). |
+| `max_action_bytes` | 64kb | Running quota over all guest-produced strings: headers, locations, rewrites, metadata, reasons. |
+| `max_header_ops` | 32 | Request plus response header operations, combined. |
+| `max_response_body` | 8kb | `Respond` body size, checked before reading guest memory. |
+
+## Output validation
+
+Every value a guest emits is validated before it touches a request:
+
+- Status codes must be 100–599 (300–399 for redirects).
+- Header names must be RFC 7230 tokens; header values reject CR, LF, and NUL, so header injection is off the table.
+- Paths and locations reject control characters; rewrite paths must start with `/`.
+
+A violating action is **rejected, not clamped**. The invocation errors and flows through your `fail_mode` policy, because silently downgrading a malformed deny into a pass-through would be worse than failing loudly.
+
+## What rules can't do
+
+Rules cannot read request or response bodies, make outbound network calls, or hold mutable state between invocations. These are design constraints, not missing features: they are what make decisions deterministic, [replay](/guides/replay) exact, latency predictable, and the failure model this simple. Small synthetic response bodies via `Respond` are the one body-shaped exception.

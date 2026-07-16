@@ -1,0 +1,149 @@
+---
+title: Writing rules
+description: "The Go SDK: reading requests, returning actions, patching headers, and composing logic with chains."
+---
+
+A rule is a plain Go package exporting one function:
+
+```go
+package myrule
+
+import "github.com/ethndotsh/switchboard/sdk"
+
+func Handle(req sdk.Request) sdk.Action {
+	return sdk.Next()
+}
+```
+
+`switchboard build` generates the TinyGo/Wasm export wrapper around it, so the package itself stays ordinary Go. It can span multiple files, use helpers, and be unit-tested like any other package.
+
+## Reading the request
+
+`sdk.Request` exposes read accessors; each one fetches only what it asks for, so cheap rules stay cheap:
+
+```go
+req.Method()              // "GET"
+req.Path()                // "/admin/users"
+req.Host()                // "example.com"
+req.Query("utm_source")   // one query parameter
+req.Header("x-user-role") // first value, case-insensitive
+req.Cookie("session")     // one cookie value
+req.ClientIP()            // adapter-resolved, honors Caddy trusted_proxies
+req.TLS()                 // true behind TLS
+```
+
+The full list, including `RawQuery`, `Scheme`, `Protocol`, `RemoteAddr`, and `HeaderValues`, is in the [SDK reference](/reference/sdk).
+
+## Returning an action
+
+Five constructors cover every decision:
+
+| Constructor | Meaning |
+| --- | --- |
+| `sdk.Next()` | Continue to the upstream (optionally with modifications). |
+| `sdk.Deny(status)` | Reject the request. |
+| `sdk.Redirect(status, location)` | Send the client elsewhere. |
+| `sdk.Rewrite(path)` | Change the path before proxying. |
+| `sdk.Respond(status, body)` | Serve a small synthetic response directly. |
+
+Every action supports chainable builders:
+
+```go
+return sdk.Next().
+	SetRequestHeader("x-tenant", tenant).       // mutate the upstream request
+	SetResponseHeader("x-frame-options", "DENY"). // mutate the client response
+	RewritePath("/v2" + req.Path()).
+	SetMetadata("backend", "v2").               // exposed as proxy variables
+	WithReason("v2-migration")                  // shows up in logs, tests, replay
+```
+
+Request-header and response-header operations are explicitly separate calls (`SetRequestHeader` vs `SetResponseHeader`), each with `Set`, `Add`, and `Delete` variants.
+
+:::tip
+Always attach a `WithReason`. Reasons surface in access logs, `switchboard eval` output, test failures, and replay diffs. They are the difference between "something denied this" and knowing exactly which branch fired.
+:::
+
+## Composing with chains
+
+`sdk.Chain` runs rules in order, threading the request through each:
+
+```go
+func Handle(req sdk.Request) sdk.Action {
+	return sdk.Chain(req,
+		BlockInternalPaths,
+		RewriteLegacyPaths,
+		AddRuleHeader,
+	)
+}
+```
+
+The semantics:
+
+- A rule that returns `sdk.Next()` **accumulates** its request patch, response headers, metadata, and reason, and the chain continues.
+- Later rules observe the request **as rewritten so far**: if an earlier rule rewrote the path, `req.Path()` returns the new one.
+- The first `Deny`, `Redirect`, or `Respond` **short-circuits** the chain and carries all accumulated state with it.
+
+This keeps each concern in its own small, individually testable function.
+
+## Patterns
+
+### Auth gate
+
+```go
+func Handle(req sdk.Request) sdk.Action {
+	if strings.HasPrefix(req.Path(), "/admin") && req.Header("x-user-role") != "admin" {
+		return sdk.Deny(401).WithReason("admin-auth-required")
+	}
+	return sdk.Next()
+}
+```
+
+### Redirect map
+
+```go
+var legacy = map[string]string{
+	"/old-pricing": "/pricing",
+	"/docs/v1":     "/docs",
+}
+
+func Handle(req sdk.Request) sdk.Action {
+	if to, ok := legacy[req.Path()]; ok {
+		return sdk.Redirect(301, to).WithReason("legacy-redirect")
+	}
+	return sdk.Next()
+}
+```
+
+### Maintenance mode
+
+```go
+func Handle(req sdk.Request) sdk.Action {
+	if req.Path() == "/health" {
+		return sdk.Next()
+	}
+	return sdk.Respond(503, maintenancePage).
+		SetResponseHeader("retry-after", "3600").
+		WithReason("maintenance")
+}
+```
+
+### Backend selection via metadata <Badge variant="accent">Caddy only</Badge>
+
+Rules don't proxy; they *decide*. `SetMetadata` hands the decision to the surrounding proxy, which routes on it; see [Caddy integration](/guides/caddy#routing-on-rule-metadata) for the full canary example:
+
+```go
+func Handle(req sdk.Request) sdk.Action {
+	if bucket(req.Cookie("user_id")) < 10 {
+		return sdk.Next().SetMetadata("backend", "v2").WithReason("v2-canary")
+	}
+	return sdk.Next().SetMetadata("backend", "v1").WithReason("stable")
+}
+```
+
+The repository ships runnable versions of all of these, each with a behavioral test suite, under [`examples/`](https://github.com/ethndotsh/switchboard/tree/master/examples).
+
+## Constraints to keep in mind
+
+- **No bodies, no network, no state.** Rules see request metadata only, cannot call out, and remember nothing between invocations; see [Security & reliability](/concepts/reliability#what-rules-cant-do).
+- **TinyGo, not gc Go.** Rules compile with TinyGo; most of the standard library works, but avoid reflection-heavy dependencies.
+- **Budgets apply.** Emitted values count against `max_action_bytes` and `max_header_ops`; a rule that emits 40 headers will be rejected, not truncated.

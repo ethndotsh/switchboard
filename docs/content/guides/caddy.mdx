@@ -1,0 +1,116 @@
+---
+title: Caddy integration
+description: "Run Switchboard as a Caddy handler module: configuration, observability, and routing on rule decisions."
+sidebar:
+  label: Caddy
+---
+
+Caddy is Switchboard's reference adapter. The handler module registers as `http.handlers.switchboard` and drops into any `route` block.
+
+## Getting a Caddy with Switchboard
+
+<Tabs>
+  <Tab title="Docker (prebuilt)">
+
+    ```sh
+    docker pull ghcr.io/ethndotsh/switchboard-caddy:latest
+    ```
+
+    Tags: `latest`, versioned (`v0.1.0`), and per-commit (`sha-<commit>`). Or build from a checkout:
+
+    ```sh
+    docker build -t switchboard-caddy .
+    ```
+
+  </Tab>
+  <Tab title="xcaddy">
+
+    ```sh
+    xcaddy build --with github.com/ethndotsh/switchboard/caddy@latest
+    ```
+
+  </Tab>
+</Tabs>
+
+## Minimal Caddyfile
+
+```caddyfile
+:8080 {
+	route {
+		switchboard {
+			registry s3
+			channel prod
+		}
+
+		reverse_proxy localhost:9000
+	}
+}
+```
+
+The handler runs your rule on every request and applies the resulting action (deny, redirect, rewrite, respond, or header patches). For `next` decisions, it falls through to the rest of the route.
+
+## A production-shaped config
+
+```caddyfile
+:8080 {
+	route {
+		switchboard {
+			registry s3 s3://rules/prod
+			namespace customer-a
+			channel prod
+			poll_interval 2s
+			invoke_timeout 50ms
+			memory_limit 32mb
+			cache_dir /var/lib/switchboard
+			fail_mode last_good
+			fallback_fail_mode open
+			pool_autoscale on
+			min_pool_size 16
+			max_pool_size 64
+		}
+
+		reverse_proxy localhost:9000
+	}
+}
+```
+
+Two directives matter most in production:
+
+- **`cache_dir`** enables [durable last-known-good](/concepts/reliability#durable-last-known-good): the proxy survives restarts with the registry down, and skips recompiling unchanged modules.
+- **`fail_mode`** decides what happens when the rule is unavailable; see [fail modes](/concepts/reliability#fail-modes) for choosing between `open`, `closed`, and `last_good`.
+
+The full directive list, with defaults, is in the [Caddyfile reference](/reference/caddyfile). Everything expensive happens off the request path, as described in [Architecture](/concepts/architecture#the-reconciler).
+
+## Observability
+
+Every request's decision, reason, and bundle ID land in Caddy's access logs and as request variables automatically, and the rule's `req.ClientIP()` uses Caddy's resolved client IP, so it honors your `trusted_proxies` configuration. Field names, metrics, and the status endpoint are in [Observability](/reference/observability).
+
+## Routing on rule metadata
+
+`SetMetadata` values become Caddy request variables, which means a rule can pick backends without implementing any proxying. Switchboard emits the decision; native Caddy modules act on it:
+
+```go
+func Handle(req sdk.Request) sdk.Action {
+	if bucket(req.Cookie("user_id")) < 10 {
+		return sdk.Next().SetMetadata("backend", "v2").WithReason("v2-canary")
+	}
+	return sdk.Next().SetMetadata("backend", "v1").WithReason("stable")
+}
+```
+
+```caddyfile
+example.com {
+	route {
+		switchboard {
+			registry s3 s3://rules/prod
+			channel prod
+		}
+
+		@v2 vars backend v2
+		reverse_proxy @v2 app-v2:8080
+		reverse_proxy app-v1:8080
+	}
+}
+```
+
+Deploying a new bundle changes the canary percentage live, with no Caddy reload. Tenant shard selection, cache policy, and rate-limit keys compose the same way. A runnable version lives at [`examples/ab-canary-routing`](https://github.com/ethndotsh/switchboard/tree/master/examples/ab-canary-routing).

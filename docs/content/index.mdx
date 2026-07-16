@@ -1,0 +1,67 @@
+---
+title: What is Switchboard?
+description: Programmable reverse proxy rules, written in Go, compiled to WebAssembly, and hot-swapped without restarts.
+sidebar:
+  label: Introduction
+  order: 0
+---
+
+Switchboard lets you change what your reverse proxy does to requests (block, redirect, rewrite, route, tag) without redeploying or restarting the proxy.
+
+You write request rules as plain Go, compile them to WebAssembly with TinyGo, and push them to a registry as immutable, content-addressed bundles. Every proxy instance polls a **channel pointer** and hot-swaps the active rule in the background. The long-lived dataplane stays stable; the fast-changing request policy lives in small, versioned Wasm guests.
+
+```go
+func Handle(req sdk.Request) sdk.Action {
+	if req.Path() == "/blocked" {
+		return sdk.Deny(403).WithReason("blocked-path")
+	}
+
+	return sdk.Next().SetRequestHeader("x-powered-by", "switchboard")
+}
+```
+
+## Why it exists
+
+Request policy changes constantly: a redirect map today, a canary split tomorrow, an emergency block at 2am. Baking that policy into proxy config means every change is a config reload or a redeploy, and a bad change takes the proxy down with it. Switchboard moves that policy into artifacts with their own lifecycle:
+
+- **Deploys don't restart the proxy.** Bundles are downloaded, verified, compiled, warmed, and tested off the request path, then swapped in atomically. In-flight requests finish on the runtime they started with.
+- **Activation is gated by the bundle's own tests.** Each bundle embeds a behavioral test suite, and every proxy re-runs it against the candidate runtime before serving traffic through it. A failing bundle is quarantined while the last known-good version keeps serving.
+- **Everything is reversible.** Deployments are idempotent, recorded as append-only revisions, and rolled back with one command.
+- **A bad rule can't take the proxy down.** Guest execution has hard timeouts and memory caps, and every value a rule emits is validated before it touches a request.
+
+## How it fits together
+
+<Frame caption="Rules flow from build to registry to a hot-swapped runtime pool.">
+  <img src="/switchboard-arch-diagram.png" alt="Switchboard architecture" />
+</Frame>
+
+Three pieces:
+
+1. **The CLI** (`switchboard`) builds rule projects into bundles, tests them, and manages deployments against a registry.
+2. **The registry** is any S3-compatible object store, a local directory, or a read-only HTTPS origin. It holds immutable bundles, channel pointers, and revision history.
+3. **The proxy** (a Caddy handler module, the standalone `switchboard serve` binary, or your own Go server embedding the engine) reconciles toward the channel pointer and executes the active rule on every request via [wazero](https://wazero.io).
+
+## Where to start
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" href="/quickstart" icon="rocket">
+    Deploy your first rule and serve traffic through it in five minutes, no object store required.
+  </Card>
+  <Card title="Concepts" href="/concepts/architecture" icon="lightbulb">
+    How bundles, channels, and the reconciler make deploys safe and reversible.
+  </Card>
+  <Card title="Writing rules" href="/guides/writing-rules" icon="pencil">
+    The Go SDK: actions, header patches, rewrites, and rule chains.
+  </Card>
+  <Card title="Caddy integration" href="/guides/caddy" icon="plug">
+    Run Switchboard inside Caddy and route on rule decisions.
+  </Card>
+</CardGroup>
+
+## What Switchboard is not
+
+Switchboard is deliberately narrow. It is not a CDN, cache, or hosted control plane, and rules cannot read bodies, make outbound calls, or keep state. [Security & reliability](/concepts/reliability) covers why those constraints exist and what they buy.
+
+---
+
+<GithubInfo />

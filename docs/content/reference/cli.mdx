@@ -1,0 +1,228 @@
+---
+title: CLI
+description: Every switchboard command and flag.
+---
+
+```sh
+switchboard <command> [flags] [args]
+```
+
+Most flags default to values from [`switchboard.yaml`](/reference/switchboard-yaml) in the working directory, so day-to-day commands need no flags at all. Flags may appear before or after positional arguments.
+
+| Command | Description |
+| --- | --- |
+| [`init`](#init) | Scaffold a rule project. |
+| [`build`](#build) | Compile the rule package into a bundle (alias: `dist`). |
+| [`test`](#test) | Run a bundle against its behavioral test cases. |
+| [`eval`](#eval) | Run one request against a bundle and print the decision. |
+| [`replay`](#replay) | Replay Caddy access logs against two bundles and diff decisions. |
+| [`deploy`](#deploy) | Upload the bundle and repoint the channel. |
+| [`status`](#status) | Show the channel pointer and latest revision. |
+| [`history`](#history) | List deployment revisions. |
+| [`diff`](#diff) | Compare two bundles or channels. |
+| [`promote`](#promote) | Copy one channel's bundle to another. |
+| [`rollback`](#rollback) | Repoint a channel at an earlier revision. |
+| [`inspect`](#inspect) | Print the raw channel pointer. |
+| [`serve`](#serve) | Standalone reverse proxy with live rule reloads. |
+| `version` | Print the CLI version. |
+
+## Bundle refs
+
+`test`, `eval`, `replay`, and `diff` accept a *ref* wherever they take a bundle:
+
+- a **dist directory** (`./dist`): a locally built bundle,
+- a **channel name** (`prod`): whatever the channel currently points at,
+- a **bundle ID** (`sha256-ab12cd34…`): a specific artifact; unambiguous prefixes are accepted.
+
+Channel and bundle refs resolve through `--registry` (or the config default).
+
+## init
+
+Scaffold a project: `go.mod`, `switchboard.yaml`, a starter rule, and its test suite.
+
+```sh
+switchboard init --name my-rules --registry file://./registry
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--name` | current directory name | Project and rule name. |
+| `--module` | derived from name | Go module path for the rule project. |
+| `--rule` | `./rules/basic` | Rule package path. |
+| `--dist` | `./dist` | Bundle output directory. |
+| `--namespace` | — | Default namespace. |
+| `--channel` | `prod` | Default deploy channel. |
+| `--registry` | — | Registry URL, e.g. `s3://bucket/prefix` or `file://./registry`. |
+
+## build
+
+Compile the rule package with TinyGo into `dist`, embedding the test suite.
+
+```sh
+switchboard build
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--out` | config `dist` | Output directory. |
+| `--name` | config `name` | Bundle name. |
+| `--cases` | config `tests` | `tests.yaml` to embed in the bundle. |
+| `--skip-tidy` | `false` | Skip `go mod tidy` before the TinyGo build. |
+| `--tinygo-opt` | `2` | TinyGo optimization level: `0`, `1`, `2`, `s`, or `z`. |
+| `--tinygo-panic` | `trap` | TinyGo panic strategy: `trap` or `print`. |
+| `--tinygo-debug` | `false` | Keep TinyGo debug information. |
+| `--wasm-opt` | `false` | Run `wasm-opt` after the TinyGo build. |
+| `--wasm-opt-level` | `Oz` | `wasm-opt` level: `O`, `O1`–`O4`, `Os`, or `Oz`. |
+
+## test
+
+Run a bundle against its behavioral test cases. Takes an optional [ref](#bundle-refs) (default: the config `dist`).
+
+```sh
+switchboard test [REF]
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--cases` | embedded suite | A `tests.yaml` to run instead of the bundle's embedded suite. |
+| `--namespace` | config | Namespace for registry refs. |
+| `--registry` | config | Registry URL for channel or bundle refs. |
+| `--invoke-timeout` | `50ms` | Invocation timeout. |
+| `--verbose` | `false` | List passing cases too. |
+| `--json` | `false` | Print the report as JSON. |
+
+## eval
+
+Run one request against a bundle and print the decision. Takes an optional [ref](#bundle-refs) (default: the config `dist`).
+
+```sh
+switchboard eval [REF] --method GET --path /admin -H "x-user-role: viewer"
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--method` | `GET` | Request method. |
+| `--scheme` | `http` | Request scheme. |
+| `--host` | — | Request host. |
+| `--path` | `/` | Request path. |
+| `--query` | — | Raw query string. |
+| `--client-ip` | — | Client IP as seen by the proxy. |
+| `--tls` | `false` | Mark the request as TLS. |
+| `-H` | — | Request header `"Name: value"` (repeatable). |
+| `--namespace` | config | Namespace for registry refs. |
+| `--registry` | config | Registry URL for channel or bundle refs. |
+| `--invoke-timeout` | `50ms` | Invocation timeout. |
+| `--json` | `false` | Print the full action as JSON. |
+
+## replay
+
+Replay Caddy JSON access logs through two bundles and diff every decision. Takes the log file as a positional argument.
+
+```sh
+switchboard replay ./access.jsonl --current prod --candidate ./dist
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--current` | — | Current bundle [ref](#bundle-refs). |
+| `--candidate` | config `dist` | Candidate bundle ref. |
+| `--namespace` | config | Namespace for registry refs. |
+| `--registry` | config | Registry URL for channel or bundle refs. |
+| `--invoke-timeout` | `50ms` | Invocation timeout. |
+| `--verbose` | `false` | Stream every difference as it is found. |
+| `--fail-on-change` | `false` | Exit non-zero when any decision changed. |
+| `--fail-on-new-denials` | `false` | Exit non-zero when the candidate denies requests the current allows. |
+| `--json` | `false` | Print the report as JSON. |
+
+## deploy
+
+Upload the built bundle and repoint the channel, appending a revision.
+
+```sh
+switchboard deploy --message "tighten admin gate"
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--channel` | config | Channel name. |
+| `--namespace` | config | Namespace. |
+| `--registry` | config | Registry URL. |
+| `--message` | — | Revision note, shown in `history`. |
+
+## status
+
+Show the channel pointer and latest revision. Flags: `--channel`, `--namespace`, `--registry`, `--json`.
+
+## history
+
+List deployment revisions, newest first. Flags: `--channel`, `--namespace`, `--registry`, `--limit` (default `20`), `--json`.
+
+## diff
+
+Compare two [refs](#bundle-refs) by artifact digest.
+
+```sh
+switchboard diff prod ./dist [--tests]
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--tests` | `false` | Cross-run each side's embedded tests against the other side. |
+| `--namespace` | config | Namespace for registry refs. |
+| `--registry` | config | Registry URL. |
+| `--invoke-timeout` | `50ms` | Invocation timeout for `--tests`. |
+
+## promote
+
+Copy one channel's bundle to another, appending a revision on the target.
+
+```sh
+switchboard promote --from staging --to prod
+```
+
+Flags: `--from`, `--to` (both required), `--namespace`, `--registry`, `--message`.
+
+## rollback
+
+Repoint a channel at earlier content, as a new appended generation.
+
+```sh
+switchboard rollback --channel prod
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--channel` | config | Channel name. |
+| `--to` | — | Target bundle ID (unambiguous prefixes accepted). |
+| `--to-generation` | — | Target revision generation number. |
+| `--namespace` | config | Namespace. |
+| `--registry` | config | Registry URL. |
+| `--message` | auto | Revision note. |
+
+With neither `--to` nor `--to-generation`, rolls back to the previous *different* bundle.
+
+## inspect
+
+Print the raw channel pointer JSON. Flags: `--channel`, `--namespace`, `--registry`.
+
+## serve
+
+Standalone reverse proxy with live rule reloads; see [Standalone & embedded](/guides/standalone).
+
+```sh
+switchboard serve --listen :8080 --upstream localhost:3000 \
+  --registry file://./registry --channel prod
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--listen` | `:8080` | Listen address. |
+| `--upstream` | — | Upstream URL or `host:port` to proxy to. |
+| `--registry` | config | Registry URL. |
+| `--namespace` | config | Namespace. |
+| `--channel` | config | Channel name. |
+| `--status-listen` | main listener | Separate listen address for `/switchboard/status` and `/metrics`. |
+| `--fail-mode` | `open` | `open`, `closed`, or `last_good`. |
+| `--poll-interval` | `2s` | Registry poll interval. |
+| `--invoke-timeout` | `50ms` | Invocation timeout. |
+| `--cache-dir` | — | Durable last-known-good cache directory. |

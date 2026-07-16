@@ -1,0 +1,67 @@
+---
+title: switchboard.yaml
+description: "The project config file: every field, plus environment variable expansion and the S3 credential variables."
+sidebar:
+  label: switchboard.yaml
+---
+
+`switchboard.yaml` lives at the root of a rule project (written by `switchboard init`) and supplies defaults for every CLI command, so day-to-day work needs no flags. Any flag overrides its config counterpart.
+
+```yaml switchboard.yaml
+name: my-rules
+rule: ./rules/basic
+dist: ./dist
+namespace: customer-a
+channel: prod
+registry: file://./registry
+```
+
+## Fields
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `name` | yes | Project and bundle name. |
+| `rule` | yes | Path to the rule package `switchboard build` compiles. |
+| `dist` | yes | Bundle output directory; also the default ref for `test`, `eval`, and `replay --candidate`. |
+| `tests` | no | Path to the `tests.yaml` embedded at build time. Defaults to the `tests.yaml` next to the rule package. |
+| `namespace` | no | Registry [namespace](/concepts/bundles-and-channels#namespaces) for tenant isolation. |
+| `channel` | yes | Default deploy channel. |
+| `registry` | no | Registry URL; see [Registries](/guides/registries) for the schemes. |
+
+## Environment variable expansion
+
+Environment variables are expanded **before** the YAML is parsed, in all of these forms:
+
+```yaml
+registry: s3://rules/${ENVIRONMENT}
+channel: ${CHANNEL:-prod}        # fallback when unset or empty
+namespace: ${TENANT-shared}      # fallback when unset
+```
+
+- `$VAR` and `${VAR}`: simple substitution
+- `${VAR:-fallback}`: fallback when the variable is unset *or empty*
+- `${VAR-fallback}`: fallback only when the variable is unset
+
+This makes one `switchboard.yaml` serve every environment; CI selects the channel and registry through its environment.
+
+## Environment variables
+
+### S3 registry credentials
+
+Used by any command touching an `s3://` registry:
+
+| Variable | Description |
+| --- | --- |
+| `SWITCHBOARD_S3_ENDPOINT` | S3 endpoint host, e.g. `localhost:9000` or `s3.amazonaws.com`. |
+| `SWITCHBOARD_S3_ACCESS_KEY` | Access key. |
+| `SWITCHBOARD_S3_SECRET_KEY` | Secret key. |
+| `SWITCHBOARD_S3_BUCKET` | Bucket name. |
+| `SWITCHBOARD_S3_INSECURE` | `true` to use plain HTTP (local MinIO). |
+
+### Deployer identity
+
+`deploy`, `promote`, and `rollback` record who acted, resolving the first of:
+
+1. `SWITCHBOARD_DEPLOYER`
+2. `GITHUB_ACTOR` (set automatically in GitHub Actions)
+3. `$USER`

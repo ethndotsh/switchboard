@@ -1,0 +1,35 @@
+---
+title: Bundles, channels & revisions
+description: "The deployment model: content-addressed bundles, mutable channel pointers, and an append-only revision history."
+sidebar:
+  label: Bundles & channels
+---
+
+Three primitives make Switchboard deployments idempotent, auditable, and reversible.
+
+## Bundles
+
+A **bundle** is the immutable unit of deployment: a compiled Wasm module, its embedded test suite, a manifest, and a descriptor that ties them together. The **bundle ID** is a sha256 digest over the descriptor's identity fields, which has two useful consequences:
+
+- **Rebuilds deduplicate.** Byte-identical content produces the same ID, so re-deploying unchanged rules skips the upload entirely. Provenance (build time, builder, commit) is an annotation and never changes identity.
+- **Content can't drift.** Every registry verifies every digest on upload and download, so a corrupted or tampered bundle fails before it can ever activate.
+
+The [bundle format reference](/reference/bundle-format) has the exact descriptor schema and ID computation.
+
+## Channels
+
+A **channel** is a named mutable pointer (`prod`, `staging`, `dev`), and the only mutable thing in the whole registry. Proxies subscribe to a channel; deploying means repointing it at a different bundle.
+
+Channels are what make promotion trivial: `switchboard promote --from staging --to prod` copies a pointer, not an artifact. The bytes that ran in staging are, verifiably, the bytes now running in prod.
+
+## Revisions
+
+Every pointer change appends an immutable **revision** record: generation number, bundle digest, previous generation, deploy time, deployer, source commit, and CI run.
+
+**History is never rewritten.** Rollback and promote are roll-forward operations: they append a *new* generation pointing at older content. `switchboard history` always shows what actually served, in order, including the rollbacks themselves. Racing deployers can't corrupt this log either; generation records are created conditionally, so the loser sees the new head and retries. Details in [Deploying & operating](/guides/deploying).
+
+## Namespaces
+
+A **namespace** isolates tenants inside one registry. With `namespace: customer-a`, every channel, revision, and bundle nests under `namespaces/customer-a/…`, so one bucket can safely serve many independent rule sets. Namespaces appear consistently across the CLI (`--namespace`), `switchboard.yaml`, and the Caddy directive.
+
+On the registry, all of this is plain objects with well-known names ([layout](/reference/bundle-format#on-registry-layout)), which is why a static HTTPS origin or CDN can serve as a read-only registry; see [Registries](/guides/registries).

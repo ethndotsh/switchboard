@@ -1,0 +1,49 @@
+---
+title: Observability
+description: The status endpoint, Prometheus metrics, and per-request decision fields in access logs.
+---
+
+## Status endpoint <Badge variant="success">Standalone only</Badge>
+
+`GET /switchboard/status` (on `switchboard serve`, and `Service.Status()` when [embedding](/guides/standalone#embedding-in-a-go-server)) returns the full engine state as JSON:
+
+- **Active and last-good bundle IDs**: what's serving now and what the fallback is.
+- **Reconciler state**: desired vs. active bundle, quarantine status, current backoff, the last activation test report, and activation counters.
+- **Pool stats**: target size, live instances, in-flight invocations, exhaustion count.
+
+With `switchboard serve`, use `--status-listen :9090` to keep status and metrics off the public listener.
+
+## Prometheus metrics <Badge variant="success">Standalone only</Badge>
+
+Served at `GET /metrics`:
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `switchboard_invocations_total` | counter | `decision`, `result` | Rule invocations, by decision and outcome. |
+| `switchboard_invocation_duration_seconds` | histogram | — | Guest execution latency. |
+| `switchboard_pool_instances` | gauge | — | Warm Wasm instances in the active pool. |
+| `switchboard_pool_inflight` | gauge | — | Invocations currently executing. |
+| `switchboard_pool_exhaustions_total` | counter | — | Requests that found no free instance. |
+| `switchboard_activation_total` | counter | `result` | Bundle activation attempts, by outcome. |
+
+Labels are deliberately low-cardinality; keep tenant IDs, paths, and user IDs in logs, not metrics. Alerts worth having: `switchboard_activation_total{result="failure"}` increasing (deploys failing their gates) and any `switchboard_pool_exhaustions_total` growth (undersized pool).
+
+## Access log fields <Badge variant="accent">Caddy only</Badge>
+
+Under Caddy, every request's access log entry carries:
+
+| Field | Value |
+| --- | --- |
+| `switchboard_decision` | `next`, `deny`, `redirect`, `rewrite`, or `respond`. |
+| `switchboard_reason` | The rule's `WithReason` label, when set. |
+| `switchboard_bundle_id` | The exact bundle that made the decision. |
+
+`switchboard_bundle_id` is the piece that makes incidents tractable: any logged decision points at the precise, immutable artifact responsible, which `switchboard history` maps back to a generation, deployer, and commit.
+
+## Request variables <Badge variant="accent">Caddy only</Badge>
+
+The Caddy adapter also sets `switchboard.decision` and `switchboard.reason` as request variables, plus one variable per `SetMetadata` key, usable in matchers and placeholders anywhere downstream in the route. See [routing on rule metadata](/guides/caddy#routing-on-rule-metadata).
+
+## Proxy-level telemetry <Badge variant="accent">Caddy only</Badge>
+
+Switchboard deliberately doesn't duplicate transport metrics. Caddy's own Prometheus/OTLP middleware covers request latency, sizes, and status codes; Switchboard's metrics cover only what the rules add.
