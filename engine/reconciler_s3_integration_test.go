@@ -36,7 +36,7 @@ func TestReconcilerActivatesS3Bundle(t *testing.T) {
 		runtime:   wasmRuntime,
 		namespace: os.Getenv("SWITCHBOARD_NAMESPACE"),
 		channel:   "prod",
-		timeout:   500 * time.Millisecond,
+		limits:    InvokeLimits{Timeout: 500 * time.Millisecond},
 		poolCfg:   PoolConfig{MinSize: 2, MaxSize: 2, Autoscale: false},
 	}
 	reconciler.reconcile(ctx)
@@ -49,7 +49,7 @@ func TestReconcilerActivatesS3Bundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if action.Type != switchboard.ActionDeny || action.StatusCode != 403 {
+	if action.Decision != switchboard.DecisionDeny || action.Response.Status != 403 {
 		t.Fatalf("action = %#v", action)
 	}
 }

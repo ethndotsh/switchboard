@@ -38,6 +38,20 @@ func (r *Runtime) PoolBounds() (int, int) {
 	return r.minPoolSize, r.maxPoolSize
 }
 
+func (r *Runtime) Stats() PoolStats {
+	if r == nil {
+		return PoolStats{}
+	}
+	return PoolStats{
+		MinSize:        r.minPoolSize,
+		MaxSize:        r.maxPoolSize,
+		TargetSize:     int(r.targetPoolSize.Load()),
+		TotalInstances: r.totalInstances.Load(),
+		Inflight:       r.inflight.Load(),
+		Exhaustions:    r.exhaustionsTotal.Load(),
+	}
+}
+
 func (r *Runtime) Warm(ctx context.Context, count int) error {
 	if r.closed.Load() {
 		return fmt.Errorf("runtime %s is closed", r.id)
@@ -69,6 +83,7 @@ func (r *Runtime) acquireModule(ctx context.Context) (RuleInstance, error) {
 		return mod, nil
 	default:
 		r.exhaustions.Add(1)
+		r.exhaustionsTotal.Add(1)
 		r.log().Warn("switchboard runtime pool exhausted",
 			zap.String("bundle_id", r.id),
 			zap.Int("target_pool_size", int(r.targetPoolSize.Load())),
@@ -88,6 +103,21 @@ func (r *Runtime) releaseModule(ctx context.Context, mod RuleInstance, healthy b
 	if !healthy || r.closed.Load() {
 		_ = mod.Close(ctx)
 		r.totalInstances.Add(-1)
+		// Replace discarded instances synchronously; with autoscale off
+		// nothing else re-warms the pool and it would drain permanently.
+		if !r.closed.Load() && r.totalInstances.Load() < r.targetPoolSize.Load() {
+			replacement, err := r.module.Instantiate(ctx)
+			if err != nil {
+				r.log().Warn("failed to replace unhealthy switchboard pool instance", zap.String("bundle_id", r.id), zap.Error(err))
+				return
+			}
+			select {
+			case r.pool <- replacement:
+				r.totalInstances.Add(1)
+			default:
+				_ = replacement.Close(ctx)
+			}
+		}
 		return
 	}
 	if r.totalInstances.Load() > r.targetPoolSize.Load() {

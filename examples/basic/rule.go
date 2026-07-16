@@ -17,12 +17,12 @@ func Handle(req sdk.Request) sdk.Action {
 	}
 	if req.Path() == "/headers" {
 		return sdk.Next().
-			SetHeader("x-switchboard-rule", "basic").
-			AddHeader("x-switchboard-list", "one").
-			AddHeader("x-switchboard-list", "two").
-			DeleteHeader("x-switchboard-delete")
+			SetRequestHeader("x-switchboard-rule", "basic").
+			AddRequestHeader("x-switchboard-list", "one").
+			AddRequestHeader("x-switchboard-list", "two").
+			DeleteRequestHeader("x-switchboard-delete")
 	}
-	return sdk.Next().SetHeader("x-switchboard-rule", "basic")
+	return sdk.Next().SetRequestHeader("x-switchboard-rule", "basic")
 }
 
 //export handle

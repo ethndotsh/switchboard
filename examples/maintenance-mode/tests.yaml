@@ -1,0 +1,39 @@
+schema: switchboard.tests/v1
+cases:
+  - name: maintenance toggle serves the static page
+    request:
+      path: /checkout
+      headers:
+        x-maintenance: "on"
+    expect:
+      action: respond
+      status: 503
+      reason: maintenance
+      body_contains: Be right back
+      response_headers:
+        Retry-After: "300"
+        Content-Type: text/html; charset=utf-8
+
+  - name: always-down path is in permanent maintenance
+    request:
+      path: /always-down
+    expect:
+      action: respond
+      status: 503
+      reason: maintenance
+      response_headers:
+        Retry-After: "300"
+
+  - name: toggle off means traffic flows normally
+    request:
+      path: /checkout
+      headers:
+        x-maintenance: "off"
+    expect:
+      action: next
+
+  - name: normal traffic without the header flows through
+    request:
+      path: /
+    expect:
+      action: next

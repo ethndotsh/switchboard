@@ -1,0 +1,58 @@
+schema: switchboard.tests/v1
+cases:
+  # fnv1a("user-1") % 100 == 0 -> canary
+  - name: user in the canary bucket is tagged v2
+    request:
+      path: /
+      cookies:
+        user_id: user-1
+    expect:
+      action: next
+      reason: v2-canary
+      metadata:
+        backend: v2
+
+  # fnv1a("beta-tester-7") % 100 == 1 -> canary
+  - name: another canary-bucket user is also tagged v2
+    request:
+      path: /api/orders
+      cookies:
+        user_id: beta-tester-7
+    expect:
+      action: next
+      reason: v2-canary
+      metadata:
+        backend: v2
+
+  # fnv1a("alice") % 100 == 79 -> stable
+  - name: user outside the canary bucket stays on v1
+    request:
+      path: /
+      cookies:
+        user_id: alice
+    expect:
+      action: next
+      reason: stable
+      metadata:
+        backend: v1
+
+  # fnv1a("user-42") % 100 == 99 -> stable
+  - name: top-of-range bucket stays on v1
+    request:
+      path: /
+      cookies:
+        user_id: user-42
+    expect:
+      action: next
+      reason: stable
+      metadata:
+        backend: v1
+
+  - name: anonymous visitor without the cookie stays on v1
+    request:
+      path: /
+    expect:
+      action: next
+      reason: stable
+      metadata:
+        backend: v1

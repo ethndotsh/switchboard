@@ -3,209 +3,68 @@ package engine
 import (
 	"context"
 	"errors"
-	"fmt"
+	"math/rand"
 	"sync"
 	"time"
 
+	"github.com/ethndotsh/switchboard/internal/bundle"
+	"github.com/ethndotsh/switchboard/internal/bundlecache"
 	"github.com/ethndotsh/switchboard/registry"
 	"go.uber.org/zap"
 )
 
-type Config struct {
-	Registry      string
-	RegistryURL   string
-	Namespace     string
-	Channel       string
-	PollInterval  string
-	FailMode      string
-	InvokeTimeout string
-	PoolAutoscale string
-	PoolSize      int
-	MinPoolSize   int
-	MaxPoolSize   int
-}
-
-type ResolvedConfig struct {
-	Registry      string
-	RegistryURL   string
-	Namespace     string
-	Channel       string
-	FailMode      string
-	PollInterval  time.Duration
-	InvokeTimeout time.Duration
-	PoolAutoscale bool
-	PoolSize      int
-	MinPoolSize   int
-	MaxPoolSize   int
-}
+const (
+	backoffBase = time.Second
+	backoffCap  = 5 * time.Minute
+)
 
 type ReconcilerState struct {
-	Namespace                string
-	Channel                  string
-	ActiveBundleID           string
-	DesiredBundleID          string
-	LastSuccessfulActivation string
-	LastFailedActivation     string
-	LastError                string
-	LastCheckedAt            time.Time
-	LastSuccessAt            time.Time
-	LastFailureAt            time.Time
+	Namespace                string    `json:"namespace,omitempty"`
+	Channel                  string    `json:"channel"`
+	ActiveBundleID           string    `json:"active_bundle_id,omitempty"`
+	DesiredBundleID          string    `json:"desired_bundle_id,omitempty"`
+	LastSuccessfulActivation string    `json:"last_successful_activation,omitempty"`
+	LastFailedActivation     string    `json:"last_failed_activation,omitempty"`
+	LastError                string    `json:"last_error,omitempty"`
+	LastTestReport           string    `json:"last_test_report,omitempty"`
+	QuarantinedBundleID      string    `json:"quarantined_bundle_id,omitempty"`
+	QuarantineReason         string    `json:"quarantine_reason,omitempty"`
+	NextRetryAt              time.Time `json:"next_retry_at,omitempty"`
+	TransientFailures        int       `json:"transient_failures,omitempty"`
+	ActivationsSucceeded     int64     `json:"activations_succeeded"`
+	ActivationsFailed        int64     `json:"activations_failed"`
+	LastCheckedAt            time.Time `json:"last_checked_at,omitempty"`
+	LastSuccessAt            time.Time `json:"last_success_at,omitempty"`
+	LastFailureAt            time.Time `json:"last_failure_at,omitempty"`
+}
+
+type quarantineKey struct {
+	BundleID string
+	Checksum string
 }
 
 type Reconciler struct {
 	registry  registry.Registry
 	manager   *RuntimeManager
 	runtime   WasmRuntime
+	cache     *bundlecache.Cache
 	namespace string
 	channel   string
 	interval  time.Duration
-	timeout   time.Duration
+	limits    InvokeLimits
 	poolCfg   PoolConfig
 	logger    *zap.Logger
+
+	quarantine      quarantineKey
+	backoffAttempts int
+	nextRetryAt     time.Time
+	rng             *rand.Rand
 
 	mu    sync.RWMutex
 	state ReconcilerState
 }
 
 type Watcher = Reconciler
-
-type Service struct {
-	manager *RuntimeManager
-	runtime WasmRuntime
-	cancel  context.CancelFunc
-}
-
-func ResolveConfig(cfg Config) (ResolvedConfig, error) {
-	resolved := ResolvedConfig{
-		Registry:      cfg.Registry,
-		RegistryURL:   cfg.RegistryURL,
-		Namespace:     cfg.Namespace,
-		Channel:       cfg.Channel,
-		FailMode:      cfg.FailMode,
-		PollInterval:  2 * time.Second,
-		InvokeTimeout: 50 * time.Millisecond,
-		PoolAutoscale: true,
-		PoolSize:      cfg.PoolSize,
-	}
-	if resolved.Channel == "" {
-		resolved.Channel = "prod"
-	}
-	if err := registry.ValidateNamespace(resolved.Namespace); err != nil {
-		return ResolvedConfig{}, err
-	}
-	if resolved.FailMode == "" {
-		resolved.FailMode = "open"
-	}
-	autoscale, err := parsePoolAutoscale(cfg.PoolAutoscale)
-	if err != nil {
-		return ResolvedConfig{}, err
-	}
-	resolved.PoolAutoscale = autoscale
-	if cfg.PoolSize < 0 {
-		return ResolvedConfig{}, fmt.Errorf("pool_size must be greater than zero")
-	}
-	if cfg.MinPoolSize < 0 {
-		return ResolvedConfig{}, fmt.Errorf("min_pool_size must be greater than zero")
-	}
-	if cfg.MaxPoolSize < 0 {
-		return ResolvedConfig{}, fmt.Errorf("max_pool_size must be greater than zero")
-	}
-	if cfg.MinPoolSize > 0 {
-		resolved.MinPoolSize = cfg.MinPoolSize
-	} else if cfg.PoolSize > 0 {
-		resolved.MinPoolSize = cfg.PoolSize
-	} else {
-		resolved.MinPoolSize = DefaultPoolSize
-	}
-	resolved.PoolSize = resolved.MinPoolSize
-	if cfg.MaxPoolSize > 0 {
-		resolved.MaxPoolSize = cfg.MaxPoolSize
-	} else {
-		resolved.MaxPoolSize = resolved.MinPoolSize * 4
-		if resolved.MaxPoolSize > DefaultMaxPoolSize {
-			resolved.MaxPoolSize = DefaultMaxPoolSize
-		}
-	}
-	if !resolved.PoolAutoscale {
-		resolved.MaxPoolSize = resolved.MinPoolSize
-	}
-	if resolved.MaxPoolSize < resolved.MinPoolSize {
-		return ResolvedConfig{}, fmt.Errorf("max_pool_size must be greater than or equal to min_pool_size")
-	}
-	if cfg.PollInterval != "" {
-		interval, err := time.ParseDuration(cfg.PollInterval)
-		if err != nil {
-			return ResolvedConfig{}, fmt.Errorf("invalid poll_interval: %w", err)
-		}
-		resolved.PollInterval = interval
-	}
-	if cfg.InvokeTimeout != "" {
-		timeout, err := time.ParseDuration(cfg.InvokeTimeout)
-		if err != nil {
-			return ResolvedConfig{}, fmt.Errorf("invalid invoke_timeout: %w", err)
-		}
-		resolved.InvokeTimeout = timeout
-	}
-	if resolved.Registry != "" && resolved.Registry != "s3" {
-		return ResolvedConfig{}, fmt.Errorf("unsupported registry %q; Switchboard currently requires s3-compatible object storage", resolved.Registry)
-	}
-	return resolved, nil
-}
-
-func Start(ctx context.Context, cfg Config, logger *zap.Logger) (*Service, error) {
-	resolved, err := ResolveConfig(cfg)
-	if err != nil {
-		return nil, err
-	}
-	s3cfg := registry.S3ConfigFromEnv()
-	if resolved.RegistryURL != "" {
-		parsed, err := registry.ParseS3URL(resolved.RegistryURL)
-		if err != nil {
-			return nil, err
-		}
-		s3cfg.Bucket = parsed.Bucket
-		s3cfg.Prefix = parsed.Prefix
-	}
-
-	baseCtx, cancel := context.WithCancel(ctx)
-	reg, err := registry.NewS3(baseCtx, s3cfg)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	wasmRuntime, err := NewWazeroRuntime(baseCtx)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	manager := &RuntimeManager{}
-	reconciler := NewReconciler(reg, manager, wasmRuntime, resolved, logger)
-	go reconciler.Run(baseCtx)
-	return &Service{manager: manager, runtime: wasmRuntime, cancel: cancel}, nil
-}
-
-func (s *Service) Current() *Runtime {
-	if s == nil || s.manager == nil {
-		return nil
-	}
-	return s.manager.Current()
-}
-
-func (s *Service) Close(ctx context.Context) error {
-	if s == nil {
-		return nil
-	}
-	if s.cancel != nil {
-		s.cancel()
-	}
-	if s.manager != nil {
-		_ = s.manager.Close(ctx)
-	}
-	if s.runtime != nil {
-		return s.runtime.Close(ctx)
-	}
-	return nil
-}
 
 func NewReconciler(reg registry.Registry, manager *RuntimeManager, wasmRuntime WasmRuntime, cfg ResolvedConfig, logger *zap.Logger) *Reconciler {
 	return &Reconciler{
@@ -215,12 +74,13 @@ func NewReconciler(reg registry.Registry, manager *RuntimeManager, wasmRuntime W
 		namespace: cfg.Namespace,
 		channel:   cfg.Channel,
 		interval:  cfg.PollInterval,
-		timeout:   cfg.InvokeTimeout,
+		limits:    cfg.invokeLimits(),
 		poolCfg: PoolConfig{
 			MinSize:   cfg.MinPoolSize,
 			MaxSize:   cfg.MaxPoolSize,
 			Autoscale: cfg.PoolAutoscale,
 		},
+		rng:    rand.New(rand.NewSource(time.Now().UnixNano())),
 		logger: logger,
 	}
 }
@@ -260,7 +120,6 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 		state.ActiveBundleID = activeID
 		state.LastCheckedAt = now
 	})
-	r.log().Info("switchboard reconcile check", zap.String("namespace", r.namespace), zap.String("channel", r.channel), zap.String("active_bundle_id", activeID))
 
 	if r.registry == nil || r.manager == nil || r.runtime == nil {
 		err := errors.New("switchboard reconciler is not fully configured")
@@ -269,19 +128,24 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 		return
 	}
 
+	if !r.nextRetryAt.IsZero() && time.Now().Before(r.nextRetryAt) {
+		r.log().Debug("switchboard reconcile backing off", zap.Time("next_retry_at", r.nextRetryAt))
+		return
+	}
+
 	scope := registry.Scope{Namespace: r.namespace}
 	pointer, err := r.registry.GetChannel(ctx, scope, r.channel)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
-			r.recordFailure("", err)
+			r.recordTransientFailure("", err)
 			r.log().Warn("failed to read switchboard channel", zap.String("namespace", r.namespace), zap.String("channel", r.channel), zap.Error(err))
 		}
 		return
 	}
+	r.resetBackoff()
 	r.updateState(func(state *ReconcilerState) {
 		state.DesiredBundleID = pointer.BundleID
 	})
-	r.log().Info("switchboard desired bundle observed", zap.String("namespace", r.namespace), zap.String("channel", r.channel), zap.String("desired_bundle_id", pointer.BundleID))
 
 	if current := r.manager.Current(); current != nil && current.ID() == pointer.BundleID {
 		r.updateState(func(state *ReconcilerState) {
@@ -292,36 +156,88 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 		return
 	}
 
+	if (quarantineKey{pointer.BundleID, pointer.Checksum}) == r.quarantine && r.quarantine != (quarantineKey{}) {
+		r.log().Debug("switchboard bundle quarantined; waiting for a new channel pointer",
+			zap.String("bundle_id", pointer.BundleID), zap.String("namespace", r.namespace), zap.String("channel", r.channel))
+		return
+	}
+
 	r.log().Info("switchboard bundle download start", zap.String("bundle_id", pointer.BundleID), zap.String("namespace", r.namespace), zap.String("channel", r.channel))
 	b, err := r.registry.GetBundle(ctx, scope, pointer.BundleID)
 	if err != nil {
-		r.recordFailure(pointer.BundleID, err)
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		if errors.Is(err, bundle.ErrInvalid) {
+			r.quarantineBundle(pointer, err)
+		} else {
+			r.recordTransientFailure(pointer.BundleID, err)
+		}
 		r.log().Warn("failed to read switchboard bundle", zap.String("bundle_id", pointer.BundleID), zap.Error(err))
 		return
 	}
-	r.log().Info("switchboard bundle checksum verified", zap.String("bundle_id", pointer.BundleID), zap.String("checksum", b.Checksum))
+	r.log().Info("switchboard bundle verified", zap.String("bundle_id", pointer.BundleID), zap.String("checksum", b.Checksum))
 
 	poolCfg := r.effectivePoolConfig()
 	r.log().Info("switchboard bundle compile start", zap.String("bundle_id", pointer.BundleID), zap.Int("min_pool_size", poolCfg.MinSize), zap.Int("max_pool_size", poolCfg.MaxSize), zap.Bool("pool_autoscale", poolCfg.Autoscale))
-	candidate, err := NewRuntimeWithPoolConfig(ctx, r.runtime, b, r.timeout, poolCfg, r.logger)
+	candidate, err := NewRuntimeWithPoolConfig(ctx, r.runtime, b, r.limits, poolCfg, r.logger)
 	if err != nil {
-		r.recordFailure(pointer.BundleID, err)
-		r.log().Warn("failed to compile or warm switchboard bundle", zap.String("bundle_id", pointer.BundleID), zap.Int("min_pool_size", poolCfg.MinSize), zap.Int("max_pool_size", poolCfg.MaxSize), zap.Bool("pool_autoscale", poolCfg.Autoscale), zap.Error(err))
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		r.quarantineBundle(pointer, err)
+		r.log().Warn("failed to compile or warm switchboard bundle", zap.String("bundle_id", pointer.BundleID), zap.Error(err))
 		return
 	}
-	r.log().Info("switchboard bundle compile and pool warm succeeded", zap.String("bundle_id", pointer.BundleID), zap.Int("pool_size", candidate.PoolSize()))
 
 	r.log().Info("switchboard validation start", zap.String("bundle_id", pointer.BundleID))
 	if err := candidate.Validate(ctx); err != nil {
 		_ = candidate.Close(ctx)
-		r.recordFailure(pointer.BundleID, err)
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		r.quarantineBundle(pointer, err)
 		r.log().Warn("switchboard validation failed", zap.String("bundle_id", pointer.BundleID), zap.Error(err))
 		return
 	}
-	r.log().Info("switchboard validation succeeded", zap.String("bundle_id", pointer.BundleID))
+
+	if err := r.runEmbeddedTests(ctx, candidate, b); err != nil {
+		_ = candidate.Close(ctx)
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		r.quarantineBundle(pointer, err)
+		r.log().Warn("switchboard embedded test suite failed", zap.String("bundle_id", pointer.BundleID), zap.Error(err))
+		return
+	}
+
 	r.manager.Activate(candidate)
 	r.recordSuccess(pointer.BundleID)
+	r.persistBundle(pointer, b)
 	r.log().Info("activated switchboard bundle", zap.String("bundle_id", pointer.BundleID), zap.String("namespace", r.namespace), zap.String("channel", r.channel))
+}
+
+func (r *Reconciler) runEmbeddedTests(ctx context.Context, candidate *Runtime, b bundle.Bundle) error {
+	if len(b.Tests) == 0 {
+		return nil
+	}
+	return r.runTestSuite(ctx, candidate, b)
+}
+
+func (r *Reconciler) persistBundle(pointer bundle.ChannelPointer, b bundle.Bundle) {
+	if r.cache == nil {
+		return
+	}
+	meta := bundlecache.Metadata{
+		BundleID:    pointer.BundleID,
+		Checksum:    b.Checksum,
+		Namespace:   r.namespace,
+		Channel:     r.channel,
+		ActivatedAt: time.Now().UTC(),
+	}
+	if err := r.cache.Store(r.namespace, r.channel, b, meta); err != nil {
+		r.log().Warn("failed to persist switchboard bundle cache", zap.String("bundle_id", pointer.BundleID), zap.Error(err))
+	}
 }
 
 func (r *Reconciler) effectivePoolConfig() PoolConfig {
@@ -351,12 +267,64 @@ func (r *Reconciler) recordSuccess(bundleID string) {
 	if current := r.managerCurrent(); current != nil {
 		activeID = current.ID()
 	}
+	r.resetBackoff()
+	r.quarantine = quarantineKey{}
 	r.updateState(func(state *ReconcilerState) {
 		state.ActiveBundleID = activeID
 		state.LastSuccessfulActivation = bundleID
 		state.LastSuccessAt = now
 		state.LastError = ""
+		state.QuarantinedBundleID = ""
+		state.QuarantineReason = ""
+		state.ActivationsSucceeded++
 	})
+}
+
+func (r *Reconciler) resetBackoff() {
+	r.backoffAttempts = 0
+	r.nextRetryAt = time.Time{}
+	r.updateState(func(state *ReconcilerState) {
+		state.TransientFailures = 0
+		state.NextRetryAt = time.Time{}
+	})
+}
+
+func (r *Reconciler) recordTransientFailure(bundleID string, err error) {
+	r.backoffAttempts++
+	delay := backoffDelay(r.backoffAttempts, r.rng)
+	r.nextRetryAt = time.Now().Add(delay)
+	nextRetry := r.nextRetryAt
+	attempts := r.backoffAttempts
+	r.recordFailure(bundleID, err)
+	r.updateState(func(state *ReconcilerState) {
+		state.TransientFailures = attempts
+		state.NextRetryAt = nextRetry
+	})
+	r.log().Warn("switchboard reconcile transient failure",
+		zap.String("bundle_id", bundleID),
+		zap.Int("attempts", attempts),
+		zap.Duration("retry_in", delay),
+		zap.Error(err))
+}
+
+// quarantineBundle marks a bundle permanently failed for the current channel
+// pointer; it is not retried until the pointer changes.
+func (r *Reconciler) quarantineBundle(pointer bundle.ChannelPointer, err error) {
+	r.quarantine = quarantineKey{BundleID: pointer.BundleID, Checksum: pointer.Checksum}
+	r.recordFailure(pointer.BundleID, err)
+	errText := ""
+	if err != nil {
+		errText = err.Error()
+	}
+	r.updateState(func(state *ReconcilerState) {
+		state.QuarantinedBundleID = pointer.BundleID
+		state.QuarantineReason = errText
+	})
+	r.log().Warn("quarantining switchboard bundle until channel pointer changes",
+		zap.String("bundle_id", pointer.BundleID),
+		zap.String("namespace", r.namespace),
+		zap.String("channel", r.channel),
+		zap.Error(err))
 }
 
 func (r *Reconciler) recordFailure(bundleID string, err error) {
@@ -376,6 +344,7 @@ func (r *Reconciler) recordFailure(bundleID string, err error) {
 		}
 		state.LastFailureAt = now
 		state.LastError = errText
+		state.ActivationsFailed++
 	})
 }
 
@@ -392,13 +361,21 @@ func (r *Reconciler) log() *zap.Logger {
 	return r.logger
 }
 
-func parsePoolAutoscale(value string) (bool, error) {
-	switch value {
-	case "", "on", "true":
-		return true, nil
-	case "off", "false":
-		return false, nil
-	default:
-		return false, fmt.Errorf("invalid pool_autoscale %q; expected on/off/true/false", value)
+func backoffDelay(attempts int, rng *rand.Rand) time.Duration {
+	if attempts < 1 {
+		attempts = 1
 	}
+	delay := backoffBase << uint(minInt(attempts-1, 20))
+	if delay > backoffCap || delay <= 0 {
+		delay = backoffCap
+	}
+	jitter := 0.8 + 0.4*rng.Float64()
+	return time.Duration(float64(delay) * jitter)
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

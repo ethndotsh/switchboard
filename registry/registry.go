@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -11,6 +12,12 @@ import (
 
 var safePathSegment = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
+var (
+	ErrNotFound       = errors.New("not found")
+	ErrReadOnly       = errors.New("registry is read-only")
+	ErrRevisionExists = errors.New("revision generation already exists")
+)
+
 type Scope struct {
 	Namespace string
 }
@@ -18,8 +25,12 @@ type Scope struct {
 type Registry interface {
 	GetChannel(ctx context.Context, scope Scope, channel string) (bundle.ChannelPointer, error)
 	GetBundle(ctx context.Context, scope Scope, id string) (bundle.Bundle, error)
+	HasBundle(ctx context.Context, scope Scope, id string) (bool, error)
 	PutBundle(ctx context.Context, scope Scope, b bundle.Bundle) error
 	PutChannel(ctx context.Context, scope Scope, pointer bundle.ChannelPointer) error
+	GetRevision(ctx context.Context, scope Scope, channel string, generation uint64) (bundle.Revision, error)
+	PutRevision(ctx context.Context, scope Scope, rev bundle.Revision) error
+	ListRevisions(ctx context.Context, scope Scope, channel string, limit int) ([]bundle.Revision, error)
 }
 
 func ValidateNamespace(namespace string) error {
@@ -38,4 +49,121 @@ func ValidateNamespace(namespace string) error {
 		}
 	}
 	return nil
+}
+
+func revisionFileName(generation uint64) string {
+	return fmt.Sprintf("%010d.json", generation)
+}
+
+// BundleFileNames are the objects under bundles/{id}/, in upload order;
+// descriptor.json goes last so its presence marks a complete bundle.
+var BundleFileNames = []string{"module.wasm", "manifest.json", "tests.yaml", "checksum.txt", "descriptor.json"}
+
+type fetchFunc func(name string) ([]byte, bool, error)
+
+// assembleBundle builds and verifies a bundle from per-file reads; every
+// registry implementation shares it so verification is identical everywhere.
+func assembleBundle(id string, fetch fetchFunc) (bundle.Bundle, error) {
+	module, ok, err := fetch("module.wasm")
+	if err != nil {
+		return bundle.Bundle{}, err
+	}
+	if !ok {
+		return bundle.Bundle{}, fmt.Errorf("bundle %s: module.wasm: %w", id, ErrNotFound)
+	}
+	manifestData, ok, err := fetch("manifest.json")
+	if err != nil {
+		return bundle.Bundle{}, err
+	}
+	if !ok {
+		return bundle.Bundle{}, fmt.Errorf("bundle %s: manifest.json: %w", id, ErrNotFound)
+	}
+	manifest, err := bundle.ParseManifest(manifestData)
+	if err != nil {
+		return bundle.Bundle{}, err
+	}
+
+	b := bundle.Bundle{
+		ID:       id,
+		Module:   module,
+		Manifest: manifest,
+		Checksum: bundle.ModuleChecksum(module),
+	}
+
+	descriptorRaw, hasDescriptor, err := fetch("descriptor.json")
+	if err != nil {
+		return bundle.Bundle{}, err
+	}
+	checksumData, hasChecksum, err := fetch("checksum.txt")
+	if err != nil {
+		return bundle.Bundle{}, err
+	}
+	if hasChecksum {
+		if err := bundle.VerifyModuleChecksum(module, strings.TrimSpace(string(checksumData))); err != nil {
+			return bundle.Bundle{}, err
+		}
+	}
+
+	if !hasDescriptor {
+		if !hasChecksum {
+			return bundle.Bundle{}, fmt.Errorf("%w: bundle %s has neither descriptor.json nor checksum.txt", bundle.ErrInvalid, id)
+		}
+		return b, nil
+	}
+
+	descriptor, err := bundle.ParseDescriptor(descriptorRaw)
+	if err != nil {
+		return bundle.Bundle{}, err
+	}
+	files := map[string][]byte{bundle.ArtifactModule: module}
+	if _, declared := descriptor.Artifacts[bundle.ArtifactTests]; declared {
+		tests, ok, err := fetch("tests.yaml")
+		if err != nil {
+			return bundle.Bundle{}, err
+		}
+		if ok {
+			files[bundle.ArtifactTests] = tests
+			b.Tests = tests
+		}
+	}
+	if err := descriptor.Verify(files); err != nil {
+		return bundle.Bundle{}, err
+	}
+	derivedID, err := descriptor.BundleID()
+	if err != nil {
+		return bundle.Bundle{}, err
+	}
+	if derivedID != id {
+		return bundle.Bundle{}, fmt.Errorf("%w: bundle id %s does not match descriptor-derived id %s", bundle.ErrInvalid, id, derivedID)
+	}
+	b.Descriptor = descriptor
+	b.DescriptorRaw = descriptorRaw
+	return b, nil
+}
+
+// listRevisionsByWalk walks generations backwards from the channel pointer,
+// for registries that cannot enumerate objects.
+func listRevisionsByWalk(ctx context.Context, reg Registry, scope Scope, channel string, limit int) ([]bundle.Revision, error) {
+	pointer, err := reg.GetChannel(ctx, scope, channel)
+	if err != nil {
+		return nil, err
+	}
+	if pointer.Generation == 0 {
+		return nil, nil
+	}
+	var revisions []bundle.Revision
+	for generation := pointer.Generation; generation > 0; generation-- {
+		if limit > 0 && len(revisions) >= limit {
+			break
+		}
+		revision, err := reg.GetRevision(ctx, scope, channel, generation)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				break
+			}
+			return nil, err
+		}
+		revisions = append(revisions, revision)
+	}
+	return revisions, nil
 }

@@ -52,5 +52,9 @@ services:
       SWITCHBOARD_S3_INSECURE: "true"
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - switchboard-cache:/var/lib/switchboard
     ports:
       - "8080:8080"
+
+volumes:
+  switchboard-cache:

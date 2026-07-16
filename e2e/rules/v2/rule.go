@@ -7,9 +7,12 @@ import (
 
 func Handle(req sdk.Request) sdk.Action {
 	if req.Path() == "/blocked" {
-		return sdk.Deny(451)
+		return sdk.Deny(451).WithReason("blocked-by-v2")
 	}
-	return sdk.Next().SetHeader("x-switchboard-rule", "v2")
+	return sdk.Next().
+		SetRequestHeader("x-switchboard-rule", "v2").
+		SetMetadata("backend", "v2").
+		WithReason("v2-default")
 }
 
 //export handle

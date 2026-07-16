@@ -27,3 +27,43 @@ jobs:
 
       - name: Run tests
         run: go test ./...
+
+  examples:
+    name: Build and test examples
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up TinyGo
+        uses: acifani/setup-tinygo@v2
+        with:
+          tinygo-version: '0.41.0'
+
+      - name: Build and test every example bundle
+        run: |
+          set -eu
+          go build -o /tmp/switchboard ./cmd/switchboard
+          for dir in examples/*/; do
+            name="$(basename "$dir")"
+            echo "==> $name"
+            out="/tmp/dist-$name"
+            /tmp/switchboard build --skip-tidy --name "$name" --out "$out" "./$dir"
+            if [ -f "$out/tests.yaml" ]; then
+              /tmp/switchboard test "$out"
+            else
+              echo "    (no embedded tests)"
+            fi
+          done
+
+      - name: Rebuilt fixture matches integration expectations
+        run: |
+          /tmp/switchboard build --skip-tidy --name 2026-06-19-switchboard --out ./dist ./examples/basic
+          go test -count=1 ./engine/ ./caddy/

@@ -2,13 +2,16 @@ package wazero
 
 import (
 	"context"
-	"net/textproto"
-	"strings"
 
-	"github.com/ethndotsh/switchboard"
 	wazeroapi "github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 )
+
+// maxLookupNameLen bounds guest-supplied lookup keys; exceeding it reads as
+// "not found" rather than a violation.
+const maxLookupNameLen = 256
+
+const maxMetadataEntries = 64
 
 func instantiateSwitchboardHostModule(ctx context.Context, runtime wazeroapi.Runtime) error {
 	builder := runtime.NewHostModuleBuilder("switchboard")
@@ -19,44 +22,29 @@ func instantiateSwitchboardHostModule(ctx context.Context, runtime wazeroapi.Run
 }
 
 func exportRequestFunctions(builder wazeroapi.HostModuleBuilder) {
-	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context) uint32 {
-		state := invocationFromContext(ctx)
-		if state == nil {
-			return 0
-		}
-		return uint32(len(state.request.Method))
-	}).Export("request_method_len")
-
-	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, ptr uint32) {
-		state := invocationFromContext(ctx)
-		if state == nil || state.request.Method == "" {
-			return
-		}
-		_ = mod.Memory().Write(ptr, []byte(state.request.Method))
-	}).Export("read_request_method")
+	exportStringField(builder, "method", func(s *invocationState) string { return s.request.Method })
+	exportStringField(builder, "path", func(s *invocationState) string { return s.request.Path })
+	exportStringField(builder, "host", func(s *invocationState) string { return s.request.Host })
+	exportStringField(builder, "raw_query", func(s *invocationState) string { return s.request.RawQuery })
+	exportStringField(builder, "scheme", func(s *invocationState) string { return s.request.Scheme })
+	exportStringField(builder, "protocol", func(s *invocationState) string { return s.request.Protocol })
+	exportStringField(builder, "remote_addr", func(s *invocationState) string { return s.request.RemoteAddr })
+	exportStringField(builder, "client_ip", func(s *invocationState) string { return s.request.ClientIP })
 
 	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context) uint32 {
 		state := invocationFromContext(ctx)
-		if state == nil {
+		if state == nil || !state.request.TLS {
 			return 0
 		}
-		return uint32(len(state.request.Path))
-	}).Export("request_path_len")
-
-	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, ptr uint32) {
-		state := invocationFromContext(ctx)
-		if state == nil || state.request.Path == "" {
-			return
-		}
-		_ = mod.Memory().Write(ptr, []byte(state.request.Path))
-	}).Export("read_request_path")
+		return 1
+	}).Export("request_tls")
 
 	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, namePtr uint32, nameLen uint32) uint32 {
 		state := invocationFromContext(ctx)
 		if state == nil {
 			return 0
 		}
-		name, ok := readGuestString(mod, namePtr, nameLen)
+		name, ok := readGuestString(mod, namePtr, nameLen, maxLookupNameLen)
 		if !ok {
 			return 0
 		}
@@ -68,7 +56,7 @@ func exportRequestFunctions(builder wazeroapi.HostModuleBuilder) {
 		if state == nil {
 			return 0
 		}
-		name, ok := readGuestString(mod, namePtr, nameLen)
+		name, ok := readGuestString(mod, namePtr, nameLen, maxLookupNameLen)
 		if !ok {
 			return 0
 		}
@@ -84,7 +72,7 @@ func exportRequestFunctions(builder wazeroapi.HostModuleBuilder) {
 		if state == nil {
 			return
 		}
-		name, ok := readGuestString(mod, namePtr, nameLen)
+		name, ok := readGuestString(mod, namePtr, nameLen, maxLookupNameLen)
 		if !ok {
 			return
 		}
@@ -94,116 +82,57 @@ func exportRequestFunctions(builder wazeroapi.HostModuleBuilder) {
 		}
 		_ = mod.Memory().Write(valuePtr, []byte(values[index]))
 	}).Export("read_request_header_value")
+
+	exportLookupField(builder, "request_query_value_len", "read_request_query_value", (*invocationState).queryValue)
+	exportLookupField(builder, "request_cookie_len", "read_request_cookie", (*invocationState).cookieValue)
 }
 
-func exportActionFunctions(builder wazeroapi.HostModuleBuilder) {
-	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context) {
-		if state := invocationFromContext(ctx); state != nil {
-			state.action.Type = switchboard.ActionNext
+func exportStringField(builder wazeroapi.HostModuleBuilder, name string, get func(*invocationState) string) {
+	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context) uint32 {
+		state := invocationFromContext(ctx)
+		if state == nil {
+			return 0
 		}
-	}).Export("action_next")
+		return uint32(len(get(state)))
+	}).Export("request_" + name + "_len")
 
-	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, status int32) {
-		if state := invocationFromContext(ctx); state != nil {
-			state.action.Type = switchboard.ActionDeny
-			state.action.StatusCode = int(status)
-		}
-	}).Export("action_deny")
-
-	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, status int32, locationPtr uint32, locationLen uint32) {
+	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, ptr uint32) {
 		state := invocationFromContext(ctx)
 		if state == nil {
 			return
 		}
-		location, ok := readGuestString(mod, locationPtr, locationLen)
-		if !ok {
+		value := get(state)
+		if value == "" {
 			return
 		}
-		state.action.Type = switchboard.ActionRedirect
-		state.action.StatusCode = int(status)
-		state.action.Location = location
-	}).Export("action_redirect")
+		_ = mod.Memory().Write(ptr, []byte(value))
+	}).Export("read_request_" + name)
+}
 
-	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, pathPtr uint32, pathLen uint32) {
+func exportLookupField(builder wazeroapi.HostModuleBuilder, lenExport, readExport string, get func(*invocationState, string) string) {
+	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, namePtr uint32, nameLen uint32) uint32 {
+		state := invocationFromContext(ctx)
+		if state == nil {
+			return 0
+		}
+		name, ok := readGuestString(mod, namePtr, nameLen, maxLookupNameLen)
+		if !ok {
+			return 0
+		}
+		return uint32(len(get(state, name)))
+	}).Export(lenExport)
+
+	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, namePtr uint32, nameLen uint32, valuePtr uint32) {
 		state := invocationFromContext(ctx)
 		if state == nil {
 			return
 		}
-		path, ok := readGuestString(mod, pathPtr, pathLen)
+		name, ok := readGuestString(mod, namePtr, nameLen, maxLookupNameLen)
 		if !ok {
 			return
 		}
-		state.action.Type = switchboard.ActionRewrite
-		state.action.RewritePath = path
-	}).Export("action_rewrite")
-
-	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, namePtr uint32, nameLen uint32, valuePtr uint32, valueLen uint32) {
-		appendHeaderOp(ctx, mod, switchboard.HeaderOpSet, namePtr, nameLen, valuePtr, valueLen)
-	}).Export("action_header_set")
-
-	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, namePtr uint32, nameLen uint32, valuePtr uint32, valueLen uint32) {
-		appendHeaderOp(ctx, mod, switchboard.HeaderOpAdd, namePtr, nameLen, valuePtr, valueLen)
-	}).Export("action_header_add")
-
-	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, namePtr uint32, nameLen uint32) {
-		state := invocationFromContext(ctx)
-		if state == nil {
-			return
+		if value := get(state, name); value != "" {
+			_ = mod.Memory().Write(valuePtr, []byte(value))
 		}
-		name, ok := readGuestString(mod, namePtr, nameLen)
-		if !ok {
-			return
-		}
-		state.action.HeaderOps = append(state.action.HeaderOps, switchboard.HeaderOp{Op: switchboard.HeaderOpDelete, Name: name})
-	}).Export("action_header_delete")
-}
-
-func invocationFromContext(ctx context.Context) *invocationState {
-	state, _ := ctx.Value(invocationStateKey{}).(*invocationState)
-	return state
-}
-
-func readGuestString(mod api.Module, ptr uint32, length uint32) (string, bool) {
-	if length == 0 {
-		return "", true
-	}
-	data, ok := mod.Memory().Read(ptr, length)
-	if !ok {
-		return "", false
-	}
-	return string(data), true
-}
-
-func appendHeaderOp(ctx context.Context, mod api.Module, op switchboard.HeaderOpType, namePtr uint32, nameLen uint32, valuePtr uint32, valueLen uint32) {
-	state := invocationFromContext(ctx)
-	if state == nil {
-		return
-	}
-	name, ok := readGuestString(mod, namePtr, nameLen)
-	if !ok {
-		return
-	}
-	value, ok := readGuestString(mod, valuePtr, valueLen)
-	if !ok {
-		return
-	}
-	state.action.HeaderOps = append(state.action.HeaderOps, switchboard.HeaderOp{Op: op, Name: name, Value: value})
-}
-
-func headerValues(headers map[string][]string, name string) []string {
-	if len(headers) == 0 || name == "" {
-		return nil
-	}
-	if values, ok := headers[name]; ok {
-		return values
-	}
-	if values, ok := headers[textproto.CanonicalMIMEHeaderKey(name)]; ok {
-		return values
-	}
-	for key, values := range headers {
-		if strings.EqualFold(key, name) {
-			return values
-		}
-	}
-	return nil
+	}).Export(readExport)
 }

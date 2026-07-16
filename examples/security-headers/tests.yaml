@@ -1,0 +1,24 @@
+schema: switchboard.tests/v1
+cases:
+  - name: https requests get the full set including HSTS
+    request:
+      path: /
+      tls: true
+    expect:
+      action: next
+      response_headers:
+        x-frame-options: DENY
+        x-content-type-options: nosniff
+        referrer-policy: strict-origin-when-cross-origin
+        strict-transport-security: "max-age=31536000; includeSubDomains"
+
+  - name: plain http requests get everything except HSTS
+    request:
+      path: /
+      tls: false
+    expect:
+      action: next
+      response_headers:
+        x-frame-options: DENY
+        x-content-type-options: nosniff
+        referrer-policy: strict-origin-when-cross-origin

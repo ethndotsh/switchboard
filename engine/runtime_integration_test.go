@@ -24,7 +24,7 @@ func TestRuntimeInvokesBuiltBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deny.Type != switchboard.ActionDeny || deny.StatusCode != 403 {
+	if deny.Decision != switchboard.DecisionDeny || deny.Response.Status != 403 {
 		t.Fatalf("deny action = %#v", deny)
 	}
 
@@ -32,7 +32,7 @@ func TestRuntimeInvokesBuiltBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if next.Type != switchboard.ActionNext || !hasHeaderOp(next, switchboard.HeaderOpSet, "x-switchboard-rule", "basic") {
+	if next.Decision != switchboard.DecisionNext || !hasHeaderOp(next, switchboard.HeaderOpSet, "x-switchboard-rule", "basic") {
 		t.Fatalf("next action = %#v", next)
 	}
 
@@ -40,7 +40,7 @@ func TestRuntimeInvokesBuiltBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if headerDeny.Type != switchboard.ActionDeny || headerDeny.StatusCode != 418 {
+	if headerDeny.Decision != switchboard.DecisionDeny || headerDeny.Response.Status != 418 {
 		t.Fatalf("header deny action = %#v", headerDeny)
 	}
 
@@ -72,7 +72,7 @@ func TestRuntimePoolExhaustion(t *testing.T) {
 }
 
 func hasHeaderOp(action switchboard.Action, op switchboard.HeaderOpType, name string, value string) bool {
-	for _, headerOp := range action.HeaderOps {
+	for _, headerOp := range action.Patch.Headers {
 		if headerOp.Op == op && headerOp.Name == name && headerOp.Value == value {
 			return true
 		}
@@ -170,7 +170,7 @@ func loadRuntimeForTestWithBackend(t testing.TB, newRuntime func(context.Context
 		Module:   module,
 		Manifest: manifest,
 		Checksum: checksum,
-	}, 500*time.Millisecond, poolCfg, nil)
+	}, InvokeLimits{Timeout: 500 * time.Millisecond}, poolCfg, nil)
 	if err != nil {
 		_ = wasmRuntime.Close(ctx)
 		t.Fatal(err)

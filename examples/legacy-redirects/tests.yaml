@@ -1,0 +1,34 @@
+schema: switchboard.tests/v1
+cases:
+  - name: old pricing page moves to /pricing
+    request:
+      path: /old-pricing
+    expect:
+      action: redirect
+      status: 301
+      location: /pricing
+      reason: legacy-redirect
+
+  - name: retired php blog moves to /blog
+    request:
+      path: /blog.php
+    expect:
+      action: redirect
+      status: 301
+      location: /blog
+      reason: legacy-redirect
+
+  - name: old docs version moves to /docs
+    request:
+      path: /docs/v1
+    expect:
+      action: redirect
+      status: 301
+      location: /docs
+      reason: legacy-redirect
+
+  - name: current pages pass through
+    request:
+      path: /pricing
+    expect:
+      action: next

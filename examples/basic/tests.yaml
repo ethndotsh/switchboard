@@ -1,0 +1,46 @@
+schema: switchboard.tests/v1
+cases:
+  - name: blocks the blocked path
+    request:
+      method: GET
+      path: /blocked
+    expect:
+      action: deny
+      status: 403
+
+  - name: redirects the old path
+    request:
+      method: GET
+      path: /old
+    expect:
+      action: redirect
+      status: 302
+      location: /new
+
+  - name: denies on the magic header
+    request:
+      method: GET
+      path: /
+      headers:
+        x-switchboard-deny: "yes"
+    expect:
+      action: deny
+      status: 418
+
+  - name: emits header operations
+    request:
+      method: GET
+      path: /headers
+    expect:
+      action: next
+      request_headers:
+        x-switchboard-rule: basic
+
+  - name: tags all other requests
+    request:
+      method: GET
+      path: /
+    expect:
+      action: next
+      request_headers:
+        x-switchboard-rule: basic

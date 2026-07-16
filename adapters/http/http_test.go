@@ -10,13 +10,21 @@ import (
 
 var benchmarkRequest switchboard.Request
 
+func stringPointer(s string) *string { return &s }
+
 func TestRequestFromHTTPUsesRequestHeaderMap(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/path", nil)
+	req := httptest.NewRequest(http.MethodGet, "/path?q=1", nil)
 	req.Header.Set("x-test", "1")
 
 	got := RequestFromHTTP(req)
 	if got.Method != http.MethodGet || got.Path != "/path" {
 		t.Fatalf("request = %#v", got)
+	}
+	if got.Host != "example.com" || got.RawQuery != "q=1" || got.Scheme != "http" || got.Protocol != "HTTP/1.1" {
+		t.Fatalf("request = %#v", got)
+	}
+	if got.ClientIP != "192.0.2.1" {
+		t.Fatalf("client ip = %q", got.ClientIP)
 	}
 	got.Headers["X-Test"] = []string{"2"}
 	if req.Header.Get("x-test") != "2" {
@@ -43,18 +51,20 @@ func BenchmarkRequestFromHTTP(b *testing.B) {
 	}
 }
 
-func TestApplyActionNextAndHeaderOps(t *testing.T) {
+func TestApplyActionNextAndRequestHeaderOps(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("x-delete", "gone")
 	res := httptest.NewRecorder()
 
 	next, err := ApplyAction(res, req, switchboard.Action{
-		Type: switchboard.ActionNext,
-		HeaderOps: []switchboard.HeaderOp{
-			{Op: switchboard.HeaderOpSet, Name: "x-switchboard-rule", Value: "test"},
-			{Op: switchboard.HeaderOpAdd, Name: "x-list", Value: "a"},
-			{Op: switchboard.HeaderOpAdd, Name: "x-list", Value: "b"},
-			{Op: switchboard.HeaderOpDelete, Name: "x-delete"},
+		Decision: switchboard.DecisionNext,
+		Patch: switchboard.RequestPatch{
+			Headers: []switchboard.HeaderOp{
+				{Op: switchboard.HeaderOpSet, Name: "x-switchboard-rule", Value: "test"},
+				{Op: switchboard.HeaderOpAdd, Name: "x-list", Value: "a"},
+				{Op: switchboard.HeaderOpAdd, Name: "x-list", Value: "b"},
+				{Op: switchboard.HeaderOpDelete, Name: "x-delete"},
+			},
 		},
 	})
 	if err != nil {
@@ -74,11 +84,20 @@ func TestApplyActionNextAndHeaderOps(t *testing.T) {
 	}
 }
 
-func TestApplyActionDeny(t *testing.T) {
+func TestApplyActionDenyWithBodyAndResponseHeaders(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	res := httptest.NewRecorder()
 
-	next, err := ApplyAction(res, req, switchboard.Action{Type: switchboard.ActionDeny, StatusCode: http.StatusTeapot})
+	next, err := ApplyAction(res, req, switchboard.Action{
+		Decision: switchboard.DecisionDeny,
+		Response: switchboard.Response{
+			Status: http.StatusTeapot,
+			Body:   []byte("nope"),
+			Headers: []switchboard.HeaderOp{
+				{Op: switchboard.HeaderOpSet, Name: "x-denied-by", Value: "switchboard"},
+			},
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,6 +107,55 @@ func TestApplyActionDeny(t *testing.T) {
 	if res.Code != http.StatusTeapot {
 		t.Fatalf("status = %d", res.Code)
 	}
+	if res.Body.String() != "nope" {
+		t.Fatalf("body = %q", res.Body.String())
+	}
+	if res.Header().Get("x-denied-by") != "switchboard" {
+		t.Fatalf("x-denied-by = %q", res.Header().Get("x-denied-by"))
+	}
+	if res.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
+		t.Fatalf("content-type = %q", res.Header().Get("Content-Type"))
+	}
+}
+
+func TestApplyActionDenyDefaultsTo403(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	res := httptest.NewRecorder()
+
+	next, err := ApplyAction(res, req, switchboard.Action{Decision: switchboard.DecisionDeny})
+	if err != nil || next {
+		t.Fatalf("next = %v err = %v", next, err)
+	}
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("status = %d", res.Code)
+	}
+}
+
+func TestApplyActionRespond(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	res := httptest.NewRecorder()
+
+	next, err := ApplyAction(res, req, switchboard.Action{
+		Decision: switchboard.DecisionRespond,
+		Response: switchboard.Response{
+			Body: []byte(`{"ok":true}`),
+			Headers: []switchboard.HeaderOp{
+				{Op: switchboard.HeaderOpSet, Name: "Content-Type", Value: "application/json"},
+			},
+		},
+	})
+	if err != nil || next {
+		t.Fatalf("next = %v err = %v", next, err)
+	}
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d (respond defaults to 200)", res.Code)
+	}
+	if res.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("explicit content-type was overridden: %q", res.Header().Get("Content-Type"))
+	}
+	if res.Body.String() != `{"ok":true}` {
+		t.Fatalf("body = %q", res.Body.String())
+	}
 }
 
 func TestApplyActionRedirect(t *testing.T) {
@@ -95,10 +163,12 @@ func TestApplyActionRedirect(t *testing.T) {
 	res := httptest.NewRecorder()
 
 	next, err := ApplyAction(res, req, switchboard.Action{
-		Type:     switchboard.ActionRedirect,
-		Location: "/new",
-		HeaderOps: []switchboard.HeaderOp{
-			{Op: switchboard.HeaderOpSet, Name: "x-powered-by", Value: "switchboard"},
+		Decision: switchboard.DecisionRedirect,
+		Response: switchboard.Response{
+			Location: "/new",
+			Headers: []switchboard.HeaderOp{
+				{Op: switchboard.HeaderOpSet, Name: "x-powered-by", Value: "switchboard"},
+			},
 		},
 	})
 	if err != nil {
@@ -118,18 +188,37 @@ func TestApplyActionRedirect(t *testing.T) {
 	}
 }
 
-func TestApplyActionRewrite(t *testing.T) {
+func TestApplyActionRewritePatch(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/old?x=1", nil)
 	res := httptest.NewRecorder()
 
-	next, err := ApplyAction(res, req, switchboard.Action{Type: switchboard.ActionRewrite, RewritePath: "/new"})
+	next, err := ApplyAction(res, req, switchboard.Action{
+		Decision: switchboard.DecisionRewrite,
+		Patch: switchboard.RequestPatch{
+			Path:  stringPointer("/new"),
+			Query: stringPointer("y=2"),
+			Host:  stringPointer("backend.internal"),
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !next {
 		t.Fatal("expected next")
 	}
-	if req.URL.Path != "/new" || req.RequestURI != "/new?x=1" {
+	if req.URL.Path != "/new" || req.RequestURI != "/new?y=2" {
 		t.Fatalf("url = %s request_uri = %s", req.URL.String(), req.RequestURI)
+	}
+	if req.Host != "backend.internal" {
+		t.Fatalf("host = %q", req.Host)
+	}
+}
+
+func TestApplyActionUnknownDecision(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	res := httptest.NewRecorder()
+
+	if _, err := ApplyAction(res, req, switchboard.Action{Decision: "bogus"}); err == nil {
+		t.Fatal("expected error for unknown decision")
 	}
 }

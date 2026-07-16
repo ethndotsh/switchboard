@@ -53,7 +53,7 @@ func TestHandlerInvokesBuiltBundle(t *testing.T) {
 		Module:   module,
 		Manifest: manifest,
 		Checksum: checksum,
-	}, 500*time.Millisecond, 2)
+	}, engine.InvokeLimits{Timeout: 500 * time.Millisecond}, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestHandlerInvokesBuiltBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deny.Type != switchboard.ActionDeny || deny.StatusCode != 403 {
+	if deny.Decision != switchboard.DecisionDeny || deny.Response.Status != 403 {
 		t.Fatalf("deny action = %#v", deny)
 	}
 
@@ -73,7 +73,7 @@ func TestHandlerInvokesBuiltBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if next.Type != switchboard.ActionNext || !hasHeaderOp(next, switchboard.HeaderOpSet, "x-switchboard-rule", "basic") {
+	if next.Decision != switchboard.DecisionNext || !hasHeaderOp(next, switchboard.HeaderOpSet, "x-switchboard-rule", "basic") {
 		t.Fatalf("next action = %#v", next)
 	}
 
@@ -104,7 +104,7 @@ func TestHandlerInvokesBuiltBundle(t *testing.T) {
 }
 
 func hasHeaderOp(action switchboard.Action, op switchboard.HeaderOpType, name string, value string) bool {
-	for _, headerOp := range action.HeaderOps {
+	for _, headerOp := range action.Patch.Headers {
 		if headerOp.Op == op && headerOp.Name == name && headerOp.Value == value {
 			return true
 		}
@@ -147,7 +147,7 @@ func TestHandlerInvocationErrorUsesFailMode(t *testing.T) {
 		Module:   module,
 		Manifest: manifest,
 		Checksum: checksum,
-	}, 500*time.Millisecond, 1)
+	}, engine.InvokeLimits{Timeout: 500 * time.Millisecond}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -141,8 +141,15 @@ func TestInitGeneratesPlainRulePackage(t *testing.T) {
 	if strings.Contains(text, "//export handle") || strings.Contains(text, "func main()") || strings.Contains(text, "abi/guest") {
 		t.Fatalf("init rule should not expose wasm wrapper details:\n%s", text)
 	}
-	if !strings.Contains(text, `return sdk.Next().SetHeader("x-powered-by", "switchboard")`) {
+	if !strings.Contains(text, `return sdk.Next().SetRequestHeader("x-powered-by", "switchboard")`) {
 		t.Fatalf("init rule should set x-powered-by:\n%s", text)
+	}
+	tests, err := os.ReadFile(filepath.Join(dir, "rules", "basic", "tests.yaml"))
+	if err != nil {
+		t.Fatalf("init should scaffold tests.yaml: %v", err)
+	}
+	if !strings.Contains(string(tests), "schema: switchboard.tests/v1") {
+		t.Fatalf("tests.yaml missing schema:\n%s", tests)
 	}
 }
 

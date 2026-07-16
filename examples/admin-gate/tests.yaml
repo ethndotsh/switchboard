@@ -1,0 +1,46 @@
+schema: switchboard.tests/v1
+cases:
+  - name: admin with admin role passes through
+    request:
+      path: /admin/dashboard
+      cookies:
+        session: abc123
+        role: admin
+    expect:
+      action: next
+
+  - name: unauthenticated admin request redirects to login
+    request:
+      path: /admin/dashboard
+    expect:
+      action: redirect
+      status: 302
+      location: /login
+      reason: login-required
+
+  - name: logged-in non-admin is denied
+    request:
+      path: /admin/settings
+      cookies:
+        session: abc123
+        role: viewer
+    expect:
+      action: deny
+      status: 403
+      reason: admin-auth-required
+
+  - name: session but no role cookie is denied
+    request:
+      path: /admin
+      cookies:
+        session: abc123
+    expect:
+      action: deny
+      status: 403
+      reason: admin-auth-required
+
+  - name: non-admin path is untouched even without cookies
+    request:
+      path: /pricing
+    expect:
+      action: next

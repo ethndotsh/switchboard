@@ -61,7 +61,7 @@ func loadBenchmarkRuntimeWithBackend(b *testing.B, newRuntime func(context.Conte
 		Module:   module,
 		Manifest: manifest,
 		Checksum: checksum,
-	}, 500*time.Millisecond, poolCfg, nil)
+	}, InvokeLimits{Timeout: 500 * time.Millisecond}, poolCfg, nil)
 	if err != nil {
 		_ = wasmRuntime.Close(ctx)
 		b.Fatal(err)
@@ -116,7 +116,7 @@ func benchmarkCompileAndWarm(b *testing.B, newRuntime func(context.Context) (Was
 		if err != nil {
 			b.Fatal(err)
 		}
-		runtime, err := NewRuntimeWithPoolConfig(ctx, wasmRuntime, benchBundle, 500*time.Millisecond, PoolConfig{MinSize: poolSize, MaxSize: poolSize, Autoscale: false}, nil)
+		runtime, err := NewRuntimeWithPoolConfig(ctx, wasmRuntime, benchBundle, InvokeLimits{Timeout: 500 * time.Millisecond}, PoolConfig{MinSize: poolSize, MaxSize: poolSize, Autoscale: false}, nil)
 		if err != nil {
 			_ = wasmRuntime.Close(ctx)
 			b.Fatal(err)
@@ -134,7 +134,7 @@ func benchmarkCompileAndWarmSharedRuntime(b *testing.B, wasmRuntime WasmRuntime,
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		runtime, err := NewRuntimeWithPoolConfig(ctx, wasmRuntime, benchBundle, 500*time.Millisecond, PoolConfig{MinSize: poolSize, MaxSize: poolSize, Autoscale: false}, nil)
+		runtime, err := NewRuntimeWithPoolConfig(ctx, wasmRuntime, benchBundle, InvokeLimits{Timeout: 500 * time.Millisecond}, PoolConfig{MinSize: poolSize, MaxSize: poolSize, Autoscale: false}, nil)
 		if err != nil {
 			b.Fatal(err)
 		}

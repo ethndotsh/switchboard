@@ -9,7 +9,7 @@ func Handle(req sdk.Request) sdk.Action {
 	if req.Path() == "/blocked" {
 		return sdk.Deny(403)
 	}
-	return sdk.Next().SetHeader("x-switchboard-rule", "v1")
+	return sdk.Next().SetRequestHeader("x-switchboard-rule", "v1")
 }
 
 //export handle

@@ -95,24 +95,91 @@ wait "$traffic_pid"
 wait_rule v2
 assert_status /blocked 451
 
-echo "==> deploying invalid bundle and confirming last good remains active"
+echo "==> confirming metadata reaches caddy vars matchers"
+selected="$(curl -sS -o /dev/null -w "%{header_json}" http://localhost:8080/ | grep -F '"x-selected-backend"' || true)"
+if [ -z "$selected" ]; then
+  echo "expected x-selected-backend response header from @v2 vars matcher" >&2
+  curl -sS -D - -o /dev/null http://localhost:8080/ >&2
+  exit 1
+fi
+
+echo "==> confirming decision fields reach access logs"
+logs="$(docker compose -f e2e/docker-compose.yml logs caddy --no-log-prefix 2>/dev/null)"
+assert_contains "$logs" "switchboard_reason" "access log should carry switchboard_reason"
+assert_contains "$logs" "v2-default" "access log should carry the v2 rule reason"
+
+echo "==> re-deploying v2 is idempotent"
+redeploy="$(/tmp/switchboard-e2e deploy /tmp/switchboard-dist-v2 --channel prod)"
+assert_contains "$redeploy" "skipping upload" "identical content should skip upload"
+
+echo "==> deploying invalid bundle and confirming quarantine + last good remains active"
 mkdir -p /tmp/switchboard-dist-bad
-printf "not wasm" > /tmp/switchboard-dist-bad/module.wasm
+printf "not wasm %s" "$(date +%s)" > /tmp/switchboard-dist-bad/module.wasm
 checksum="sha256:$(shasum -a 256 /tmp/switchboard-dist-bad/module.wasm | awk '{print $1}')"
 cat > /tmp/switchboard-dist-bad/manifest.json <<EOF
 {
   "name": "bad",
   "version": "bad-$(date +%s)",
-  "abi_version": "switchboard/v1",
+  "abi_version": "switchboard/v3",
   "entrypoint": "handle",
   "language": "go-tinygo"
 }
 EOF
 printf "%s\n" "$checksum" > /tmp/switchboard-dist-bad/checksum.txt
+rm -f /tmp/switchboard-dist-bad/descriptor.json /tmp/switchboard-dist-bad/tests.yaml
 /tmp/switchboard-e2e deploy /tmp/switchboard-dist-bad --channel prod
-sleep 3
+sleep 6
 wait_rule v2
 assert_status /blocked 451
+logs="$(docker compose -f e2e/docker-compose.yml logs caddy --no-log-prefix 2>/dev/null)"
+quarantine_count="$(printf "%s" "$logs" | grep -c "quarantining switchboard bundle" || true)"
+if [ "$quarantine_count" != "1" ]; then
+  echo "expected exactly one quarantine log line, got $quarantine_count" >&2
+  exit 1
+fi
+bad_compiles="$(printf "%s" "$logs" | grep "bundle compile start" | grep -c '"bundle_id":"bad-' || true)"
+if [ "$bad_compiles" -gt 1 ]; then
+  echo "broken bundle was recompiled $bad_compiles times; quarantine failed" >&2
+  exit 1
+fi
+
+echo "==> rolling back the channel away from the broken bundle"
+rollback="$(/tmp/switchboard-e2e rollback --channel prod)"
+assert_contains "$rollback" "rolled back channel prod" "rollback output"
+status="$(/tmp/switchboard-e2e status --channel prod)"
+assert_contains "$status" "rollback to generation" "status shows rollback revision"
+history="$(/tmp/switchboard-e2e history --channel prod)"
+assert_contains "$history" "rollback to generation" "history records the rollback"
+wait_rule v2
+assert_status /blocked 451
+
+echo "==> confirming cached bundle serves while object store is down"
+docker compose -f e2e/docker-compose.yml stop minio >/dev/null
+docker compose -f e2e/docker-compose.yml restart caddy >/dev/null
+wait_http http://localhost:8080/
+wait_rule v2
+assert_status /blocked 451
+logs="$(docker compose -f e2e/docker-compose.yml logs caddy --no-log-prefix 2>/dev/null)"
+assert_contains "$logs" "bootstrapped switchboard bundle from cache" "cache bootstrap log"
+
+echo "==> confirming reconciliation resumes when the store returns"
+docker compose -f e2e/docker-compose.yml start minio >/dev/null
+sleep 3
+/tmp/switchboard-e2e deploy /tmp/switchboard-dist-v1 --channel prod
+wait_rule v1
+assert_status /blocked 403
+
+echo "==> replaying captured access logs offline"
+docker compose -f e2e/docker-compose.yml logs caddy --no-log-prefix 2>/dev/null \
+  | grep -F '"logger":"http.log.access' > /tmp/switchboard-e2e-access.jsonl || true
+if [ -s /tmp/switchboard-e2e-access.jsonl ]; then
+  replay="$(/tmp/switchboard-e2e replay /tmp/switchboard-e2e-access.jsonl \
+    --current /tmp/switchboard-dist-v1 --candidate /tmp/switchboard-dist-v2)"
+  assert_contains "$replay" "Requests processed" "replay report"
+  echo "$replay" | head -6
+else
+  echo "no access log lines captured; skipping replay check" >&2
+fi
 
 echo "==> confirming namespaces isolate same channel name"
 /tmp/switchboard-e2e deploy /tmp/switchboard-dist-v1 --namespace customer-a --channel shared
