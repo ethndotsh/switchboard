@@ -3,7 +3,7 @@
   <img src="docs/public/logo.svg" alt="Switchboard" width="288">
 </picture>
 
-Switchboard is an open-source prototype for programmable reverse proxy rules.
+Prototype for programmable reverse proxy rules.
 
 Users write request rules in Go, compile them to WebAssembly with TinyGo, upload immutable bundles to object storage, and proxy instances poll a channel pointer to hot-swap the active rule without restarting the proxy.
 
