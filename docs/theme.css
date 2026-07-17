@@ -40,6 +40,19 @@
   padding-left: 2.5rem;
 }
 
+/* Mermaid SVGs carry width="100%", but their bare div wrapper is a
+   shrink-to-fit flex item, so the percentage resolves against the SVG's own
+   300px replaced-element fallback and diagrams render tiny. Give the wrapper
+   the full prose width; the SVG's inline max-width still caps it at the
+   diagram's natural size. */
+blume-mermaid > div {
+  width: 100%;
+}
+
+blume-mermaid svg {
+  height: auto;
+}
+
 /* Badges rendered inside headings: use the body font and center on the cap height. */
 :is(h1, h2, h3, h4, h5, h6) span.not-prose.inline-flex {
   font-family: var(--blume-font-body);
