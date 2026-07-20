@@ -67,6 +67,8 @@ switchboard build
 | `--out` | config `dist` | Output directory. |
 | `--name` | config `name` | Bundle name. |
 | `--cases` | config `tests` | `tests.yaml` to embed in the bundle. |
+| `--data` | config `data` | Directory of read-only [data files](/guides/data-files) to embed. Defaults to `data/` next to the rule. |
+| `--max-data-bytes` | config `max_data_bytes` (4mb) | Maximum total size of embedded data files. |
 | `--skip-tidy` | `false` | Skip `go mod tidy` before the TinyGo build. |
 | `--tinygo-opt` | `2` | TinyGo optimization level: `0`, `1`, `2`, `s`, or `z`. |
 | `--tinygo-panic` | `trap` | TinyGo panic strategy: `trap` or `print`. |
@@ -223,6 +225,19 @@ switchboard serve --listen :8080 --upstream localhost:3000 \
 | `--channel` | config | Channel name. |
 | `--status-listen` | main listener | Separate listen address for `/switchboard/status` and `/metrics`. |
 | `--fail-mode` | `open` | `open`, `closed`, or `last_good`. |
+| `--fallback-fail-mode` | `open` | Fallback when `--fail-mode last_good` can't apply: `open` or `closed`. |
 | `--poll-interval` | `2s` | Registry poll interval. |
 | `--invoke-timeout` | `50ms` | Invocation timeout. |
+| `--memory-limit` | `32mb` | Guest linear-memory cap. |
+| `--max-action-bytes` | `64kb` | Maximum encoded action size. |
+| `--max-header-ops` | `32` | Maximum header operations per action. |
+| `--max-response-body` | `8kb` | Maximum `respond` body size. |
+| `--max-data-bytes` | `4mb` | Maximum total bundle data size. |
 | `--cache-dir` | — | Durable last-known-good cache directory. |
+| `--bootstrap-from-cache` | on with `--cache-dir` | Activate the cached bundle before reaching the registry: `on`/`off`. |
+| `--pool-autoscale` | `on` | Autoscale the instance pool: `on`/`off`. |
+| `--pool-size` | `16` | Instance pool size (seeds min when min is unset). |
+| `--min-pool-size` | `16` | Minimum instance pool size. |
+| `--max-pool-size` | `min×4` (≤128) | Maximum instance pool size. |
+
+These are the same knobs as the [Caddyfile directives](/reference/caddyfile), in kebab-case; the snake_case directive names map one to one.

@@ -17,7 +17,7 @@ switchboard serve \
   --channel dev
 ```
 
-It runs the same engine and reconciler as the Caddy module, and honors `--fail-mode` (`open`, `closed`, `last_good`) and `--cache-dir` for [durable last-known-good](/concepts/reliability#durable-last-known-good).
+It runs the same engine and reconciler as the Caddy module, and exposes the same configuration surface: `--fail-mode` (`open`, `closed`, `last_good`), `--cache-dir` for [durable last-known-good](/concepts/reliability#durable-last-known-good), the execution limits (`--memory-limit`, `--max-action-bytes`, `--max-response-body`, `--max-data-bytes`), and pool sizing (`--pool-size`, `--min-pool-size`, `--max-pool-size`, `--pool-autoscale`). These are the Caddyfile directives in kebab-case; see the [CLI reference](/reference/cli#serve).
 
 Built-in endpoints:
 

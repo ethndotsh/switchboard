@@ -3,19 +3,25 @@ title: Observability
 description: The status endpoint, Prometheus metrics, and per-request decision fields in access logs.
 ---
 
-## Status endpoint <Badge variant="success">Standalone only</Badge>
+The status endpoint and metric set are the same across every adapter; each front-end only chooses how to expose them.
 
-`GET /switchboard/status` (on `switchboard serve`, and `Service.Status()` when [embedding](/guides/standalone#embedding-in-a-go-server)) returns the full engine state as JSON:
+## Status endpoint <Badge variant="success">All adapters</Badge>
+
+`Service.Status()` returns the full engine state as JSON:
 
 - **Active and last-good bundle IDs**: what's serving now and what the fallback is.
 - **Reconciler state**: desired vs. active bundle, quarantine status, current backoff, the last activation test report, and activation counters.
 - **Pool stats**: target size, live instances, in-flight invocations, exhaustion count.
 
-With `switchboard serve`, use `--status-listen :9090` to keep status and metrics off the public listener.
+How to reach it per adapter:
 
-## Prometheus metrics <Badge variant="success">Standalone only</Badge>
+- **`switchboard serve`**: `GET /switchboard/status`; use `--status-listen :9090` to keep status and metrics off the public listener.
+- **Caddy**: set the `status_path` directive (e.g. `status_path /switchboard/status`).
+- **Embedded**: mount `httpadapter.StatusHandler(service)`, or call `Service.Status()` directly. See [embedding](/guides/standalone#embedding-in-a-go-server).
 
-Served at `GET /metrics`:
+## Prometheus metrics <Badge variant="success">All adapters</Badge>
+
+The same `switchboard_*` collectors are recorded by every adapter:
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
@@ -25,6 +31,12 @@ Served at `GET /metrics`:
 | `switchboard_pool_inflight` | gauge | — | Invocations currently executing. |
 | `switchboard_pool_exhaustions_total` | counter | — | Requests that found no free instance. |
 | `switchboard_activation_total` | counter | `result` | Bundle activation attempts, by outcome. |
+
+Where they are served:
+
+- **`switchboard serve`**: `GET /metrics` (its own registry).
+- **Caddy**: registered on Caddy's default registry, so they appear on Caddy's admin `/metrics` endpoint next to Caddy's own metrics.
+- **Embedded**: call `httpadapter.NewMetrics(registerer, service)` and expose your registry however you like.
 
 Labels are deliberately low-cardinality; keep tenant IDs, paths, and user IDs in logs, not metrics. Alerts worth having: `switchboard_activation_total{result="failure"}` increasing (deploys failing their gates) and any `switchboard_pool_exhaustions_total` growth (undersized pool).
 

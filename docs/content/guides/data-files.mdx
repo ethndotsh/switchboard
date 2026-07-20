@@ -1,0 +1,89 @@
+---
+title: Bundle data files
+description: "Ship read-only lookup tables inside a bundle: allowlists, redirect maps, cohort tables, hashed into identity and exposed to the rule."
+sidebar:
+  label: Data files
+---
+
+Rules are pure functions with no network, no state, and no body access. That keeps them deterministic and replayable, but it also means a rule can't look anything up. **Data files** close that gap without breaking the model: read-only files baked into the bundle, exposed to the rule through the SDK.
+
+Because the data is embedded in the bundle, it is immutable, hashed into the [bundle's identity](/concepts/bundles-and-channels#bundles), and validated by the same [activation gates](/concepts/reliability#activation-gates) as the code. Changing a data file produces a new bundle ID that must pass its embedded tests before it can activate, and rolls back exactly like a code change. A decision stays a pure function of the request, so [replay](/guides/replay) is still exact.
+
+Use data files for lookups that change at roughly the same cadence as the rule: IP allow/deny lists, redirect maps, feature-flag tables, canary cohorts. For data that changes far faster than the code, a deploy per change is the wrong tool.
+
+## Adding data to a bundle
+
+Put files in a `data/` directory next to the rule:
+
+```txt
+my-rules/
+  rule.go
+  tests.yaml
+  data/
+    allowlist.txt
+    flags.json
+```
+
+`switchboard build` picks up `data/` automatically. Point elsewhere with `--data ./path`, and cap the total embedded size with `--max-data-bytes` (default 4mb):
+
+```sh
+switchboard build --data ./config --max-data-bytes 8mb
+```
+
+Each file is added to the [descriptor](/reference/bundle-format) under a `data/<name>` artifact with its own digest, so tampering with a data file fails verification just like tampering with the module.
+
+## Reading data in a rule
+
+Files are named relative to the data directory. The SDK parses and caches each file on first use, so the per-request cost is a map lookup.
+
+```go rule.go
+package gate
+
+import "github.com/ethndotsh/switchboard/sdk"
+
+func Handle(req sdk.Request) sdk.Action {
+	if sdk.DataSet("allowlist.txt").Contains(req.ClientIP()) {
+		return sdk.Next()
+	}
+	return sdk.Deny(403).WithReason("not-allowlisted")
+}
+```
+
+Pick the accessor for your file's shape: `DataSet` and `DataLines` for newline lists, `DataJSON` and `DataTOML` to unmarshal structured config into a struct, `DataJSONL` for JSON Lines, `DataCSV` for tables, and `DataBytes`/`DataString` for the raw contents. The [SDK reference](/reference/sdk#data-files) has the full signatures.
+
+Two things worth knowing while you write:
+
+- **A missing file is never an error** — the typed accessors leave their target empty and return nil, so a rule degrades predictably rather than trapping.
+- **You only pay for the formats you use.** Each parser is linked into the guest only when its accessor is called (TinyGo strips the rest), so a `DataSet`-only rule stays tiny while a `DataTOML` rule links the TOML parser.
+
+:::note[No YAML]
+YAML is intentionally absent: `gopkg.in/yaml.v3` fails at runtime under TinyGo. Use JSON or TOML for structured config.
+:::
+
+See the [`ip-allowlist` example](https://github.com/ethndotsh/switchboard/tree/master/examples/ip-allowlist) for a `DataSet` membership rule, and [`feature-flags`](https://github.com/ethndotsh/switchboard/tree/master/examples/feature-flags) for typed struct config via `DataJSON`.
+
+## Testing with data
+
+The embedded test suite runs against the exact bundled data, on the same runtime that will serve traffic, so "tests passed" means "passed with this data." No mocking is needed; just write cases that depend on the lookup:
+
+```yaml tests.yaml
+cases:
+  - name: allowlisted client passes
+    request:
+      client_ip: 203.0.113.7
+    expect:
+      action: next
+```
+
+For pure-Go unit tests of a rule, inject data with `sdk.LoadTestData`:
+
+```go
+sdk.LoadTestData(map[string][]byte{"allowlist.txt": []byte("203.0.113.7\n")})
+if got := Handle(sdk.NewRequest(sdk.RequestData{ClientIP: "203.0.113.7"})); got.Decision != sdk.DecisionNext {
+	t.Fatal("expected allowlisted client to pass")
+}
+```
+
+## Limits
+
+The total size of a bundle's data is capped by `max_data_bytes` (default 4mb), enforced both at build time and as an activation gate: a bundle whose data exceeds the cap is quarantined rather than activated. Raise it in `switchboard.yaml` or per proxy with the `max_data_bytes` Caddyfile directive / `--max-data-bytes` serve flag.

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,7 +24,9 @@ import (
 func serveCommand(ctx context.Context, args []string) error {
 	cfg := loadConfigOrDefault()
 	args = normalizeFlagArgs(args, "listen", "upstream", "registry", "namespace", "channel",
-		"status-listen", "fail-mode", "poll-interval", "invoke-timeout", "cache-dir")
+		"status-listen", "fail-mode", "fallback-fail-mode", "poll-interval", "invoke-timeout",
+		"memory-limit", "max-action-bytes", "max-header-ops", "max-response-body", "max-data-bytes",
+		"cache-dir", "bootstrap-from-cache", "pool-autoscale", "pool-size", "min-pool-size", "max-pool-size")
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	listen := fs.String("listen", ":8080", "listen address")
 	upstream := fs.String("upstream", "", "upstream URL or host:port to proxy to")
@@ -34,9 +35,20 @@ func serveCommand(ctx context.Context, args []string) error {
 	channel := fs.String("channel", cfg.Channel, "channel name")
 	statusListen := fs.String("status-listen", "", "separate listen address for /switchboard/status and /metrics (default: same listener)")
 	failMode := fs.String("fail-mode", "open", "fail mode: open, closed, or last_good")
+	fallbackFailMode := fs.String("fallback-fail-mode", "", "fallback fail mode when fail-mode is last_good: open or closed")
 	pollInterval := fs.String("poll-interval", "", "registry poll interval (default 2s)")
 	invokeTimeout := fs.String("invoke-timeout", "", "invocation timeout (default 50ms)")
+	memoryLimit := fs.String("memory-limit", "", "guest memory limit (default 32mb)")
+	maxActionBytes := fs.String("max-action-bytes", "", "maximum encoded action size (default 64kb)")
+	maxHeaderOps := fs.Int("max-header-ops", 0, "maximum header operations per action (default 32)")
+	maxResponseBody := fs.String("max-response-body", "", "maximum respond body size (default 8kb)")
+	maxDataBytes := fs.String("max-data-bytes", "", "maximum total bundle data size (default 4mb)")
 	cacheDir := fs.String("cache-dir", "", "durable last-known-good cache directory")
+	bootstrapFromCache := fs.String("bootstrap-from-cache", "", "activate the cached bundle before the registry: on/off (default on with cache-dir)")
+	poolAutoscale := fs.String("pool-autoscale", "", "autoscale the instance pool: on/off (default on)")
+	poolSize := fs.Int("pool-size", 0, "instance pool size (default 16)")
+	minPoolSize := fs.Int("min-pool-size", 0, "minimum instance pool size")
+	maxPoolSize := fs.Int("max-pool-size", 0, "maximum instance pool size")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -55,13 +67,24 @@ func serveCommand(ctx context.Context, args []string) error {
 	defer logger.Sync()
 
 	service, err := engine.Start(ctx, engine.Config{
-		RegistryURL:   *registryURL,
-		Namespace:     *namespace,
-		Channel:       *channel,
-		PollInterval:  *pollInterval,
-		FailMode:      *failMode,
-		InvokeTimeout: *invokeTimeout,
-		CacheDir:      *cacheDir,
+		RegistryURL:        *registryURL,
+		Namespace:          *namespace,
+		Channel:            *channel,
+		PollInterval:       *pollInterval,
+		FailMode:           *failMode,
+		FallbackFailMode:   *fallbackFailMode,
+		InvokeTimeout:      *invokeTimeout,
+		MemoryLimit:        *memoryLimit,
+		MaxActionBytes:     *maxActionBytes,
+		MaxHeaderOps:       *maxHeaderOps,
+		MaxResponseBody:    *maxResponseBody,
+		MaxDataBytes:       *maxDataBytes,
+		CacheDir:           *cacheDir,
+		BootstrapFromCache: *bootstrapFromCache,
+		PoolAutoscale:      *poolAutoscale,
+		PoolSize:           *poolSize,
+		MinPoolSize:        *minPoolSize,
+		MaxPoolSize:        *maxPoolSize,
 	}, logger)
 	if err != nil {
 		return err
@@ -76,21 +99,14 @@ func serveCommand(ctx context.Context, args []string) error {
 
 	proxy := httputil.NewSingleHostReverseProxy(upstreamURL)
 	handler := httpadapter.Middleware(service, httpadapter.Options{
-		FailMode: *failMode,
-		Logger:   logger,
-		Metrics:  metrics,
+		FailMode:   *failMode,
+		Logger:     logger,
+		Metrics:    metrics,
+		OnDecision: logDecision(logger),
 	})(proxy)
 
 	statusMux := http.NewServeMux()
-	statusMux.HandleFunc("/switchboard/status", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		data, err := statusJSON(service)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		_, _ = w.Write(data)
-	})
+	statusMux.Handle("/switchboard/status", httpadapter.StatusHandler(service))
 	statusMux.Handle("/metrics", promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{}))
 
 	mainMux := http.NewServeMux()
@@ -146,6 +162,26 @@ func parseUpstream(raw string) (*url.URL, error) {
 	return parsed, nil
 }
 
-func statusJSON(service *engine.Service) ([]byte, error) {
-	return json.MarshalIndent(service.Status(), "", "  ")
+// logDecision surfaces each rule decision as structured access-log fields, the
+// standalone equivalent of the Caddy handler exposing decision metadata.
+func logDecision(logger *zap.Logger) func(*http.Request, engine.InvokeResult) {
+	return func(r *http.Request, result engine.InvokeResult) {
+		// Check first so the field slice is not built per request when debug
+		// logging is off.
+		if !logger.Core().Enabled(zap.DebugLevel) {
+			return
+		}
+		fields := []zap.Field{
+			zap.String("path", r.URL.Path),
+			zap.String("decision", string(result.Action.Decision)),
+			zap.String("bundle_id", result.BundleID),
+		}
+		if result.Action.Reason != "" {
+			fields = append(fields, zap.String("reason", result.Action.Reason))
+		}
+		for key, value := range result.Action.Metadata {
+			fields = append(fields, zap.String("metadata."+key, value))
+		}
+		logger.Debug("switchboard decision", fields...)
+	}
 }

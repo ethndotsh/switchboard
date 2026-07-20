@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -13,7 +14,15 @@ const DescriptorSchema = "switchboard.descriptor/v1"
 const (
 	ArtifactModule = "module.wasm"
 	ArtifactTests  = "tests.yaml"
+	// DataPrefix marks descriptor artifacts that are read-only data files
+	// bundled with the rule and exposed to the guest via the data ABI.
+	DataPrefix = "data/"
 )
+
+// IsDataArtifact reports whether an artifact name is a bundled data file.
+func IsDataArtifact(name string) bool {
+	return strings.HasPrefix(name, DataPrefix)
+}
 
 type ArtifactRef struct {
 	Digest string `json:"digest"`

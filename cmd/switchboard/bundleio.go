@@ -17,15 +17,18 @@ import (
 )
 
 type bundleArtifactOptions struct {
-	Name       string
-	Tests      []byte
-	Provenance bundle.Provenance
+	Name         string
+	Tests        []byte
+	Data         map[string][]byte
+	MaxDataBytes int
+	Provenance   bundle.Provenance
 }
 
 type bundleArtifactResult struct {
 	BundleID  string
 	Checksum  string
 	TestCases int
+	DataFiles int
 }
 
 // writeBundleArtifacts packages a compiled module into a dist directory;
@@ -46,6 +49,14 @@ func writeBundleArtifacts(out string, module []byte, opts bundleArtifactOptions)
 		}
 		testCases = len(suite.Cases)
 		artifacts[bundle.ArtifactTests] = opts.Tests
+	}
+	dataTotal := 0
+	for name, data := range opts.Data {
+		artifacts[name] = data
+		dataTotal += len(data)
+	}
+	if opts.MaxDataBytes > 0 && dataTotal > opts.MaxDataBytes {
+		return bundleArtifactResult{}, fmt.Errorf("bundle data %d bytes exceeds max_data_bytes %d", dataTotal, opts.MaxDataBytes)
 	}
 
 	descriptor := bundle.NewDescriptor(identity, artifacts)
@@ -83,12 +94,21 @@ func writeBundleArtifacts(out string, module []byte, opts bundleArtifactOptions)
 		// A stale tests.yaml would break descriptor verification.
 		_ = os.Remove(filepath.Join(out, "tests.yaml"))
 	}
+	for name, data := range opts.Data {
+		files[name] = data
+	}
 	for name, data := range files {
-		if err := os.WriteFile(filepath.Join(out, name), data, 0o644); err != nil {
+		path := filepath.Join(out, filepath.FromSlash(name))
+		if dir := filepath.Dir(path); dir != out {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return bundleArtifactResult{}, err
+			}
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
 			return bundleArtifactResult{}, err
 		}
 	}
-	return bundleArtifactResult{BundleID: bundleID, Checksum: checksum, TestCases: testCases}, nil
+	return bundleArtifactResult{BundleID: bundleID, Checksum: checksum, TestCases: testCases, DataFiles: len(opts.Data)}, nil
 }
 
 func readBundleDir(dir string) (bundle.Bundle, error) {
@@ -122,13 +142,24 @@ func readBundleDir(dir string) (bundle.Bundle, error) {
 			return bundle.Bundle{}, err
 		}
 		files := map[string][]byte{bundle.ArtifactModule: module}
-		if _, declared := descriptor.Artifacts[bundle.ArtifactTests]; declared {
-			tests, err := os.ReadFile(filepath.Join(dir, "tests.yaml"))
-			if err != nil {
-				return bundle.Bundle{}, fmt.Errorf("descriptor declares tests.yaml but it is missing: %w", err)
+		for name := range descriptor.Artifacts {
+			if name == bundle.ArtifactModule {
+				continue
 			}
-			files[bundle.ArtifactTests] = tests
-			b.Tests = tests
+			data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(name)))
+			if err != nil {
+				return bundle.Bundle{}, fmt.Errorf("descriptor declares %s but it is missing: %w", name, err)
+			}
+			files[name] = data
+			switch {
+			case name == bundle.ArtifactTests:
+				b.Tests = data
+			case bundle.IsDataArtifact(name):
+				if b.Data == nil {
+					b.Data = map[string][]byte{}
+				}
+				b.Data[name] = data
+			}
 		}
 		if err := descriptor.Verify(files); err != nil {
 			return bundle.Bundle{}, err

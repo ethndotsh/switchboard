@@ -16,6 +16,10 @@ import (
 // makeCacheBundle builds a valid descriptor-backed bundle. The manifest ABI
 // must be bundle.ABIVersion or Load's ParseManifest rejects the cache entry.
 func makeCacheBundle(t *testing.T, name string, module, tests []byte) bundle.Bundle {
+	return makeCacheBundleWithData(t, name, module, tests, nil)
+}
+
+func makeCacheBundleWithData(t *testing.T, name string, module, tests []byte, data map[string][]byte) bundle.Bundle {
 	t.Helper()
 	identity := bundle.ManifestIdentity{
 		Name:       name,
@@ -26,6 +30,9 @@ func makeCacheBundle(t *testing.T, name string, module, tests []byte) bundle.Bun
 	artifacts := map[string][]byte{bundle.ArtifactModule: module}
 	if len(tests) > 0 {
 		artifacts[bundle.ArtifactTests] = tests
+	}
+	for dataName, value := range data {
+		artifacts[dataName] = value
 	}
 	descriptor := bundle.NewDescriptor(identity, artifacts)
 	id, err := descriptor.BundleID()
@@ -48,8 +55,25 @@ func makeCacheBundle(t *testing.T, name string, module, tests []byte) bundle.Bun
 		},
 		Checksum:      bundle.ModuleChecksum(module),
 		Tests:         tests,
+		Data:          data,
 		Descriptor:    descriptor,
 		DescriptorRaw: descriptorRaw,
+	}
+}
+
+func TestStoreLoadData(t *testing.T) {
+	cache := New(t.TempDir())
+	data := map[string][]byte{"data/allowlist.txt": []byte("203.0.113.7\n")}
+	b := makeCacheBundleWithData(t, "gate", []byte("\x00asm"), nil, data)
+	if err := cache.Store("", "prod", b, testMetadata(b, "", "prod")); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	got, _, err := cache.Load("", "prod")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if string(got.Data["data/allowlist.txt"]) != "203.0.113.7\n" {
+		t.Fatalf("data round-trip mismatch: %q", got.Data["data/allowlist.txt"])
 	}
 }
 

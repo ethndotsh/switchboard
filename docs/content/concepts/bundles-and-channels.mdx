@@ -9,7 +9,7 @@ Three primitives make Switchboard deployments idempotent, auditable, and reversi
 
 ## Bundles
 
-A **bundle** is the immutable unit of deployment: a compiled Wasm module, its embedded test suite, a manifest, and a descriptor that ties them together. The **bundle ID** is a sha256 digest over the descriptor's identity fields, which has two useful consequences:
+A **bundle** is the immutable unit of deployment: a compiled Wasm module, its embedded test suite, any read-only [data files](/guides/data-files), a manifest, and a descriptor that ties them together. The **bundle ID** is a sha256 digest over the descriptor's identity fields (including every artifact's digest, so data files are part of identity too), which has two useful consequences:
 
 - **Rebuilds deduplicate.** Byte-identical content produces the same ID, so re-deploying unchanged rules skips the upload entirely. Provenance (build time, builder, commit) is an annotation and never changes identity.
 - **Content can't drift.** Every registry verifies every digest on upload and download, so a corrupted or tampered bundle fails before it can ever activate.

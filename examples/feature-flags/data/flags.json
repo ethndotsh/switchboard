@@ -1,0 +1,5 @@
+{
+  "maintenance": false,
+  "banner": "beta program open",
+  "blocked_paths": ["/admin", "/internal"]
+}

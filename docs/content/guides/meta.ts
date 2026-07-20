@@ -5,6 +5,7 @@ export default defineMeta({
   order: 3,
   pages: [
     "writing-rules",
+    "data-files",
     "testing",
     "replay",
     "deploying",

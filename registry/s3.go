@@ -141,12 +141,8 @@ func (r *S3Registry) PutBundle(ctx context.Context, scope Scope, b bundle.Bundle
 	if err != nil {
 		return err
 	}
-	for _, name := range BundleFileNames {
-		data, ok := files[name]
-		if !ok {
-			continue
-		}
-		if err := r.put(ctx, r.scopedKey(scope, "bundles", b.ID, name), data, contentTypeFor(name), minio.PutObjectOptions{}); err != nil {
+	for _, name := range bundleWriteOrder(files) {
+		if err := r.put(ctx, r.scopedKey(scope, "bundles", b.ID, name), files[name], contentTypeFor(name), minio.PutObjectOptions{}); err != nil {
 			return err
 		}
 	}
@@ -306,6 +302,8 @@ func contentTypeFor(name string) string {
 		return "application/json"
 	case strings.HasSuffix(name, ".yaml"), strings.HasSuffix(name, ".yml"):
 		return "application/yaml"
+	case strings.HasSuffix(name, ".csv"):
+		return "text/csv"
 	default:
 		return "text/plain"
 	}

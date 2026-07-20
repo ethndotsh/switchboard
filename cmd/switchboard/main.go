@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 func main() {
 	if err := run(context.Background(), os.Args[1:]); err != nil {

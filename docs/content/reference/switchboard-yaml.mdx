@@ -24,6 +24,8 @@ registry: file://./registry
 | `rule` | yes | Path to the rule package `switchboard build` compiles. |
 | `dist` | yes | Bundle output directory; also the default ref for `test`, `eval`, and `replay --candidate`. |
 | `tests` | no | Path to the `tests.yaml` embedded at build time. Defaults to the `tests.yaml` next to the rule package. |
+| `data` | no | Directory of read-only [data files](/guides/data-files) embedded at build time. Defaults to the `data/` directory next to the rule package. |
+| `max_data_bytes` | no | Maximum total size of embedded data files (e.g. `8mb`). Defaults to 4mb. |
 | `namespace` | no | Registry [namespace](/concepts/bundles-and-channels#namespaces) for tenant isolation. |
 | `channel` | yes | Default deploy channel. |
 | `registry` | no | Registry URL; see [Registries](/guides/registries) for the schemes. |

@@ -24,20 +24,16 @@ func Middleware(service *engine.Service, opts Options) func(http.Handler) http.H
 	if logger == nil {
 		logger = zap.NewNop()
 	}
+	instrumentation := Instrumentation{Metrics: opts.Metrics, OnDecision: opts.OnDecision}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 			result, err := service.InvokeWithFallback(r.Context(), RequestFromHTTP(r))
-			if opts.Metrics != nil {
-				opts.Metrics.ObserveInvocation(result.Action.Decision, err, time.Since(start))
-			}
+			instrumentation.Observe(r, result, err, time.Since(start))
 			if err != nil {
 				logger.Warn("switchboard rule invocation failed", zap.String("bundle_id", result.BundleID), zap.Error(err))
 				failUnavailable(w, r, next, opts.FailMode)
 				return
-			}
-			if opts.OnDecision != nil {
-				opts.OnDecision(r, result)
 			}
 			callNext, err := ApplyAction(w, r, result.Action)
 			if err != nil {

@@ -26,6 +26,7 @@ type Config struct {
 	MaxActionBytes     string
 	MaxHeaderOps       int
 	MaxResponseBody    string
+	MaxDataBytes       string
 	CacheDir           string
 	BootstrapFromCache string
 	PoolAutoscale      string
@@ -47,6 +48,7 @@ type ResolvedConfig struct {
 	MaxActionBytes     int
 	MaxHeaderOps       int
 	MaxResponseBody    int
+	MaxDataBytes       int
 	CacheDir           string
 	BootstrapFromCache bool
 	PoolAutoscale      bool
@@ -61,6 +63,7 @@ func (c ResolvedConfig) invokeLimits() InvokeLimits {
 		MaxActionBytes:  c.MaxActionBytes,
 		MaxHeaderOps:    c.MaxHeaderOps,
 		MaxResponseBody: c.MaxResponseBody,
+		MaxDataBytes:    c.MaxDataBytes,
 	}
 }
 
@@ -78,6 +81,7 @@ func ResolveConfig(cfg Config) (ResolvedConfig, error) {
 		MaxActionBytes:   DefaultMaxActionBytes,
 		MaxHeaderOps:     DefaultMaxHeaderOps,
 		MaxResponseBody:  DefaultMaxResponseBody,
+		MaxDataBytes:     DefaultMaxDataBytes,
 		CacheDir:         cfg.CacheDir,
 		PoolAutoscale:    true,
 		PoolSize:         cfg.PoolSize,
@@ -106,7 +110,7 @@ func ResolveConfig(cfg Config) (ResolvedConfig, error) {
 		return ResolvedConfig{}, fmt.Errorf("invalid fallback_fail_mode %q; expected open or closed", resolved.FallbackFailMode)
 	}
 	if cfg.MemoryLimit != "" {
-		limit, err := parseByteSize(cfg.MemoryLimit)
+		limit, err := ParseByteSize(cfg.MemoryLimit)
 		if err != nil {
 			return ResolvedConfig{}, fmt.Errorf("invalid memory_limit: %w", err)
 		}
@@ -119,7 +123,7 @@ func ResolveConfig(cfg Config) (ResolvedConfig, error) {
 		resolved.MemoryLimitBytes = limit
 	}
 	if cfg.MaxActionBytes != "" {
-		limit, err := parseByteSize(cfg.MaxActionBytes)
+		limit, err := ParseByteSize(cfg.MaxActionBytes)
 		if err != nil {
 			return ResolvedConfig{}, fmt.Errorf("invalid max_action_bytes: %w", err)
 		}
@@ -135,7 +139,7 @@ func ResolveConfig(cfg Config) (ResolvedConfig, error) {
 		resolved.MaxHeaderOps = cfg.MaxHeaderOps
 	}
 	if cfg.MaxResponseBody != "" {
-		limit, err := parseByteSize(cfg.MaxResponseBody)
+		limit, err := ParseByteSize(cfg.MaxResponseBody)
 		if err != nil {
 			return ResolvedConfig{}, fmt.Errorf("invalid max_response_body: %w", err)
 		}
@@ -143,6 +147,16 @@ func ResolveConfig(cfg Config) (ResolvedConfig, error) {
 			return ResolvedConfig{}, fmt.Errorf("max_response_body must be at most 1mb")
 		}
 		resolved.MaxResponseBody = int(limit)
+	}
+	if cfg.MaxDataBytes != "" {
+		limit, err := ParseByteSize(cfg.MaxDataBytes)
+		if err != nil {
+			return ResolvedConfig{}, fmt.Errorf("invalid max_data_bytes: %w", err)
+		}
+		if limit > 64<<20 {
+			return ResolvedConfig{}, fmt.Errorf("max_data_bytes must be at most 64mb")
+		}
+		resolved.MaxDataBytes = int(limit)
 	}
 	switch cfg.BootstrapFromCache {
 	case "":

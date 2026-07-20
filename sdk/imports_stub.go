@@ -16,6 +16,8 @@ func requestHeaderValues(string) []string { return nil }
 func requestQueryValue(string) string     { return "" }
 func requestCookie(string) string         { return "" }
 
+func dataRead(name string) []byte { return testData[name] }
+
 func actionNext()                       {}
 func actionDeny(int32)                  {}
 func actionRedirect(int, string)        {}

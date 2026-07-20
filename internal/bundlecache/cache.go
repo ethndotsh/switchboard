@@ -80,8 +80,17 @@ func (c *Cache) Store(namespace, channel string, b bundle.Bundle, meta Metadata)
 	if len(b.Tests) > 0 {
 		files["tests.yaml"] = b.Tests
 	}
+	for name, data := range b.Data {
+		files[name] = data
+	}
 	for name, data := range files {
-		if err := writeAndSync(filepath.Join(tmp, name), data); err != nil {
+		path := filepath.Join(tmp, filepath.FromSlash(name))
+		if parent := filepath.Dir(path); parent != tmp {
+			if err := os.MkdirAll(parent, 0o755); err != nil {
+				return err
+			}
+		}
+		if err := writeAndSync(path, data); err != nil {
 			return err
 		}
 	}
@@ -139,6 +148,9 @@ func (c *Cache) Load(namespace, channel string) (bundle.Bundle, Metadata, error)
 		Manifest: manifest,
 		Checksum: bundle.ModuleChecksum(module),
 	}
+	files := map[string][]byte{
+		"module.wasm": module,
+	}
 	if descriptorRaw, err := os.ReadFile(filepath.Join(current, "descriptor.json")); err == nil {
 		descriptor, err := bundle.ParseDescriptor(descriptorRaw)
 		if err != nil {
@@ -146,20 +158,30 @@ func (c *Cache) Load(namespace, channel string) (bundle.Bundle, Metadata, error)
 		}
 		b.Descriptor = descriptor
 		b.DescriptorRaw = descriptorRaw
-	}
-	if tests, err := os.ReadFile(filepath.Join(current, "tests.yaml")); err == nil {
-		b.Tests = tests
-	}
-	files := map[string][]byte{
-		"module.wasm": module,
-	}
-	if len(b.Tests) > 0 {
-		files["tests.yaml"] = b.Tests
-	}
-	if len(b.DescriptorRaw) > 0 {
+		for name := range descriptor.Artifacts {
+			if name == bundle.ArtifactModule {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(current, filepath.FromSlash(name)))
+			if err != nil {
+				return bundle.Bundle{}, Metadata{}, err
+			}
+			files[name] = data
+			switch {
+			case name == bundle.ArtifactTests:
+				b.Tests = data
+			case bundle.IsDataArtifact(name):
+				if b.Data == nil {
+					b.Data = map[string][]byte{}
+				}
+				b.Data[name] = data
+			}
+		}
 		if err := b.Descriptor.Verify(files); err != nil {
 			return bundle.Bundle{}, Metadata{}, err
 		}
+	} else if tests, err := os.ReadFile(filepath.Join(current, "tests.yaml")); err == nil {
+		b.Tests = tests
 	}
 
 	var meta Metadata

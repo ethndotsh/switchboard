@@ -103,12 +103,14 @@ func (r *FileRegistry) PutBundle(ctx context.Context, scope Scope, b bundle.Bund
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	for _, name := range BundleFileNames {
-		data, ok := files[name]
-		if !ok {
-			continue
+	for _, name := range bundleWriteOrder(files) {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if parent := filepath.Dir(path); parent != dir {
+			if err := os.MkdirAll(parent, 0o755); err != nil {
+				return err
+			}
 		}
-		if err := writeFileAtomic(filepath.Join(dir, name), data); err != nil {
+		if err := writeFileAtomic(path, files[name]); err != nil {
 			return err
 		}
 	}
@@ -223,6 +225,9 @@ func bundleFiles(b bundle.Bundle) (map[string][]byte, error) {
 	}
 	if len(b.Tests) > 0 {
 		files["tests.yaml"] = b.Tests
+	}
+	for name, data := range b.Data {
+		files[name] = data
 	}
 	if len(b.DescriptorRaw) > 0 {
 		files["descriptor.json"] = b.DescriptorRaw

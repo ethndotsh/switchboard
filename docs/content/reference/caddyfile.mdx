@@ -57,6 +57,20 @@ All five are [hard bounds enforced per invocation](/concepts/reliability#executi
 | `max_header_ops` | `32` | Request + response header operations combined. |
 | `max_response_body` | `8kb` | Maximum `Respond` body size. |
 
+## Data files
+
+| Directive | Default | Description |
+| --- | --- | --- |
+| `max_data_bytes` | `4mb` | Maximum total size of a bundle's [data files](/guides/data-files). A bundle exceeding it is quarantined at activation, not clamped. |
+
+## Observability
+
+| Directive | Default | Description |
+| --- | --- | --- |
+| `status_path` | — | When set (e.g. `/switchboard/status`), requests to that path are served the status JSON instead of being proxied. |
+
+The handler registers `switchboard_*` metrics on Caddy's default Prometheus registry, so they appear on Caddy's [`/metrics` endpoint](/reference/observability) alongside Caddy's own metrics. Decision, reason, and bundle ID are also exposed as Caddy request variables and access-log fields.
+
 ## Cache
 
 | Directive | Default | Description |

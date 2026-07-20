@@ -13,15 +13,20 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/ethndotsh/switchboard/engine"
+	"github.com/ethndotsh/switchboard/internal/bundle"
 )
 
 func build(ctx context.Context, args []string) error {
 	cfg := loadConfigOrDefault()
-	args = normalizeFlagArgs(args, "out", "name", "cases", "tinygo-opt", "tinygo-panic", "wasm-opt-level")
+	args = normalizeFlagArgs(args, "out", "name", "cases", "data", "max-data-bytes", "tinygo-opt", "tinygo-panic", "wasm-opt-level")
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
 	out := fs.String("out", cfg.Dist, "output directory")
 	name := fs.String("name", cfg.Name, "bundle name")
 	cases := fs.String("cases", cfg.Tests, "tests.yaml to embed in the bundle")
+	dataDir := fs.String("data", cfg.Data, "directory of read-only data files to embed in the bundle")
+	maxDataBytes := fs.String("max-data-bytes", cfg.MaxDataBytes, "maximum total size of embedded data files")
 	skipTidy := fs.Bool("skip-tidy", false, "skip go mod tidy before TinyGo build")
 	tinyGoOpt := fs.String("tinygo-opt", "2", "TinyGo optimization level: 0, 1, 2, s, or z")
 	tinyGoPanic := fs.String("tinygo-panic", "trap", "TinyGo panic strategy: trap or print")
@@ -86,20 +91,85 @@ func build(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	data, err := resolveDataDir(*dataDir, source)
+	if err != nil {
+		return err
+	}
+	maxData := engine.DefaultMaxDataBytes
+	if *maxDataBytes != "" {
+		limit, err := engine.ParseByteSize(*maxDataBytes)
+		if err != nil {
+			return fmt.Errorf("invalid max-data-bytes: %w", err)
+		}
+		maxData = int(limit)
+	}
 	result, err := writeBundleArtifacts(*out, module, bundleArtifactOptions{
-		Name:       bundleName,
-		Tests:      tests,
-		Provenance: buildProvenance(ctx),
+		Name:         bundleName,
+		Tests:        tests,
+		Data:         data,
+		MaxDataBytes: maxData,
+		Provenance:   buildProvenance(ctx),
 	})
 	if err != nil {
 		return err
 	}
-	if len(tests) > 0 {
-		fmt.Printf("built %s (%s, %d embedded test cases)\n", abbreviateBundleID(result.BundleID), result.Checksum, result.TestCases)
-	} else {
-		fmt.Printf("built %s (%s)\n", abbreviateBundleID(result.BundleID), result.Checksum)
+	summary := fmt.Sprintf("built %s (%s", abbreviateBundleID(result.BundleID), result.Checksum)
+	if result.TestCases > 0 {
+		summary += fmt.Sprintf(", %d embedded test cases", result.TestCases)
 	}
+	if result.DataFiles > 0 {
+		summary += fmt.Sprintf(", %d data files", result.DataFiles)
+	}
+	fmt.Println(summary + ")")
 	return nil
+}
+
+// resolveDataDir reads a directory of read-only data files, keyed by their
+// bundle artifact name (data/<path>). An explicit path must exist; the default
+// data/ directory next to the rule is optional.
+func resolveDataDir(explicit, rulePath string) (map[string][]byte, error) {
+	dir := explicit
+	optional := false
+	if dir == "" {
+		dir = filepath.Join(rulePath, "data")
+		optional = true
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		if optional && errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read data dir: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("data path %s is not a directory", dir)
+	}
+	data := map[string][]byte{}
+	walkErr := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		data[bundle.DataPrefix+filepath.ToSlash(rel)] = contents
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+	return data, nil
 }
 
 // resolveTestsFile prefers an explicit path, then tests.yaml next to the

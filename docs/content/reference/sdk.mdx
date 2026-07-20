@@ -91,6 +91,24 @@ func Handle(req sdk.Request) sdk.Action {
 
 Runs each `func(sdk.Request) sdk.Action` in order. `Next()` results accumulate their request patch, response headers, metadata, and reason; later rules observe the request as rewritten so far. The first `Deny`, `Redirect`, or `Respond` short-circuits with all accumulated state. See [Writing rules](/guides/writing-rules#composing-with-chains).
 
+## Data files
+
+Read-only files bundled under `data/` (see [Bundle data files](/guides/data-files)). Each accessor parses and caches its file on first use; files are named relative to the data directory.
+
+| Accessor | File shape | Returns |
+| --- | --- | --- |
+| `sdk.DataBytes(name)` | any | raw `[]byte`, nil if absent |
+| `sdk.DataString(name)` | any | contents as a string |
+| `sdk.DataSet(name)` | newline-delimited (blank and `#` lines ignored) | `sdk.Set`; `Set.Contains(s) bool` (unordered, deduped) |
+| `sdk.DataLines(name)` | newline-delimited (blank and `#` lines ignored) | `[]string`, ordered, duplicates kept |
+| `sdk.DataMap(name)` | JSON object of strings | `map[string]string`, nil if absent or invalid |
+| `sdk.DataJSON(name, &v)` | JSON value | unmarshals into `v`; error on invalid JSON |
+| `sdk.DataJSONL(name, &v)` | JSON Lines | appends each line into `*[]T` |
+| `sdk.DataTOML(name, &v)` | TOML | unmarshals into `v`; error on invalid TOML |
+| `sdk.DataCSV(name)` | CSV | `[][]string` rows |
+
+Each format's parser is linked into the guest only when its accessor is called, so rules pay for a format only if they use it. YAML is not supported (`yaml.v3` fails under TinyGo). `sdk.LoadTestData(map[string][]byte)` injects data for host-side rule tests; keys may include or omit the `data/` prefix. See [Bundle data files](/guides/data-files).
+
 ## Host-side testing
 
 The SDK doubles as a plain Go library for unit tests: `sdk.NewRequest(data)` builds a populated request from an `sdk.RequestData` literal, so rule functions can be tested with `go test` before ever compiling to Wasm:
@@ -109,4 +127,4 @@ Decision constants: `DecisionNext`, `DecisionDeny`, `DecisionRedirect`, `Decisio
 
 ## ABI
 
-The SDK targets the `switchboard/v3` host-function ABI, recorded in each bundle's [descriptor](/reference/bundle-format). Request-header and response-header operations are explicitly separate; the v2 API where one operation meant different things per action is gone.
+The SDK targets the `switchboard/v4` host-function ABI, recorded in each bundle's [descriptor](/reference/bundle-format). v4 adds the data-file host functions; a host requires an exact ABI match, so bundles built for an earlier ABI must be rebuilt. Request-header and response-header operations are explicitly separate; the v2 API where one operation meant different things per action is gone.

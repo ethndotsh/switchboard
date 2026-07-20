@@ -3,6 +3,7 @@ package wazero
 import (
 	"context"
 
+	"github.com/ethndotsh/switchboard/internal/bundle"
 	wazeroapi "github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 )
@@ -17,8 +18,42 @@ func instantiateSwitchboardHostModule(ctx context.Context, runtime wazeroapi.Run
 	builder := runtime.NewHostModuleBuilder("switchboard")
 	exportRequestFunctions(builder)
 	exportActionFunctions(builder)
+	exportDataFunctions(builder)
 	_, err := builder.Instantiate(ctx)
 	return err
+}
+
+// exportDataFunctions serves read-only bundled data files to the guest. The
+// guest names a file relative to the data dir (e.g. "allowlist.txt"); the host
+// resolves it against the bundle's data artifacts. Values are immutable for
+// the life of the instance, so the guest caches them after the first read.
+func exportDataFunctions(builder wazeroapi.HostModuleBuilder) {
+	lookup := func(state *invocationState, name string) []byte {
+		if state == nil || state.data == nil {
+			return nil
+		}
+		return state.data[bundle.DataPrefix+name]
+	}
+
+	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, namePtr uint32, nameLen uint32) uint32 {
+		state := invocationFromContext(ctx)
+		name, ok := readGuestString(mod, namePtr, nameLen, maxLookupNameLen)
+		if !ok {
+			return 0
+		}
+		return uint32(len(lookup(state, name)))
+	}).Export("data_read_len")
+
+	builder.NewFunctionBuilder().WithFunc(func(ctx context.Context, mod api.Module, namePtr uint32, nameLen uint32, valuePtr uint32) {
+		state := invocationFromContext(ctx)
+		name, ok := readGuestString(mod, namePtr, nameLen, maxLookupNameLen)
+		if !ok {
+			return
+		}
+		if value := lookup(state, name); len(value) > 0 {
+			_ = mod.Memory().Write(valuePtr, value)
+		}
+	}).Export("read_data")
 }
 
 func exportRequestFunctions(builder wazeroapi.HostModuleBuilder) {

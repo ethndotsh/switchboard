@@ -13,13 +13,15 @@ import (
 )
 
 type projectConfig struct {
-	Name      string `yaml:"name"`
-	Rule      string `yaml:"rule"`
-	Dist      string `yaml:"dist"`
-	Tests     string `yaml:"tests,omitempty"`
-	Namespace string `yaml:"namespace,omitempty"`
-	Channel   string `yaml:"channel"`
-	Registry  string `yaml:"registry,omitempty"`
+	Name         string `yaml:"name"`
+	Rule         string `yaml:"rule"`
+	Dist         string `yaml:"dist"`
+	Tests        string `yaml:"tests,omitempty"`
+	Data         string `yaml:"data,omitempty"`
+	MaxDataBytes string `yaml:"max_data_bytes,omitempty"`
+	Namespace    string `yaml:"namespace,omitempty"`
+	Channel      string `yaml:"channel"`
+	Registry     string `yaml:"registry,omitempty"`
 }
 
 func defaultConfig() projectConfig {

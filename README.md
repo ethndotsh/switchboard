@@ -29,7 +29,7 @@ func Handle(req sdk.Request) sdk.Action {
 - **Registry**: S3-compatible object storage, local `file://`, or read-only `https://`
 - **Proxy**: Caddy handler module (`http.handlers.switchboard`), standalone `switchboard serve`, or embeddable Go middleware
 - **Runtime**: wazero with enforced timeouts, memory caps, and output validation
-- **Guests**: TinyGo WASI modules against a small host ABI (`switchboard/v3`)
+- **Guests**: TinyGo WASI modules against a small host ABI (`switchboard/v4`)
 
 ## Install
 
@@ -82,11 +82,11 @@ Highlights:
 
 ## Examples
 
-Real-world rules, each with a behavioral test suite, under [`examples/`](examples/): auth gating, legacy redirects, security headers, maintenance mode, and metadata-driven canary routing.
+Real-world rules, each with a behavioral test suite, under [`examples/`](examples/): auth gating, legacy redirects, security headers, maintenance mode, metadata-driven canary routing, a data-file-driven [IP allowlist](examples/ip-allowlist/), and a typed-config [feature-flags](examples/feature-flags/) rule.
 
 ## Limitations
 
-Rules cannot read request/response bodies, make network calls, or hold state. That's by design: it keeps decisions deterministic, replayable offline, and predictable when they fail. Switchboard is not a CDN, cache, or hosted control plane. Caddy is the reference adapter.
+Rules cannot read request/response bodies, make network calls, or hold state. They can read immutable [data files](docs/content/guides/data-files.mdx) baked into the bundle (allowlists, redirect maps, cohort tables), which keeps lookups deterministic and replayable without reintroducing state. Switchboard is not a CDN, cache, or hosted control plane. Caddy is the reference adapter.
 
 ## Prior art
 

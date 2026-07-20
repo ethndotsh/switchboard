@@ -10,16 +10,17 @@ A bundle is a directory of artifacts described by a `descriptor.json` with schem
 ```json descriptor.json
 {
   "schema": "switchboard.descriptor/v1",
-  "abi": "switchboard/v3",
+  "abi": "switchboard/v4",
   "manifest": {
     "name": "my-rules",
-    "abi": "switchboard/v3",
+    "abi": "switchboard/v4",
     "entrypoint": "handle",
     "language": "go-tinygo"
   },
   "artifacts": {
     "module.wasm": { "digest": "sha256:…", "size": 30762 },
-    "tests.yaml": { "digest": "sha256:…", "size": 372 }
+    "tests.yaml": { "digest": "sha256:…", "size": 372 },
+    "data/allowlist.txt": { "digest": "sha256:…", "size": 172 }
   },
   "provenance": {
     "built_at": "2026-07-16T14:02:58Z",
@@ -33,9 +34,9 @@ A bundle is a directory of artifacts described by a `descriptor.json` with schem
 | Field | In identity | Description |
 | --- | --- | --- |
 | `schema` | yes | Descriptor schema version. |
-| `abi` | yes | Host-function ABI the module targets (`switchboard/v3`). |
+| `abi` | yes | Host-function ABI the module targets (`switchboard/v4`). |
 | `manifest` | yes | Bundle name, ABI, entrypoint export, source language. |
-| `artifacts` | yes | Digest and size of every artifact in the bundle. |
+| `artifacts` | yes | Digest and size of every artifact: `module.wasm`, optional `tests.yaml`, and any [data files](/guides/data-files) under `data/`. |
 | `provenance` | no | Build time, builder version, source commit. Annotation only. |
 | `signatures` | no | Reserved for future bundle signing (Ed25519/Sigstore planned). |
 
@@ -59,9 +60,12 @@ revisions/prod/0000000042.json
 bundles/sha256-<digest>/module.wasm
 bundles/sha256-<digest>/manifest.json
 bundles/sha256-<digest>/tests.yaml
+bundles/sha256-<digest>/data/allowlist.txt
 bundles/sha256-<digest>/checksum.txt
 bundles/sha256-<digest>/descriptor.json
 ```
+
+`descriptor.json` is written last, so its presence marks a complete upload after every other object (including `data/` files) is durably in place.
 
 With a [namespace](/concepts/bundles-and-channels#namespaces), everything nests under `namespaces/<name>/…`.
 
@@ -69,4 +73,4 @@ With a [namespace](/concepts/bundles-and-channels#namespaces), everything nests 
 
 - `checksum.txt` (a module-only digest) is still written and verified for compatibility, but `descriptor.json` is authoritative.
 - Legacy bundles without a descriptor still load, with a warning.
-- Proxies refuse bundles whose `abi` they don't support.
+- Proxies refuse bundles whose `abi` they don't support. The current ABI is `switchboard/v4`; bundles built against `switchboard/v3` or earlier must be rebuilt with the current SDK.

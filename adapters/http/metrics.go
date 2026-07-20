@@ -13,6 +13,8 @@ import (
 type Metrics struct {
 	invocations *prometheus.CounterVec
 	duration    prometheus.Histogram
+	reg         prometheus.Registerer
+	collectors  []prometheus.Collector
 }
 
 func NewMetrics(reg prometheus.Registerer, service *engine.Service) (*Metrics, error) {
@@ -60,10 +62,29 @@ func NewMetrics(reg prometheus.Registerer, service *engine.Service) (*Metrics, e
 	}
 	for _, collector := range collectors {
 		if err := reg.Register(collector); err != nil {
+			// Roll back partial registration so a retry can start clean.
+			for _, registered := range m.collectors {
+				reg.Unregister(registered)
+			}
 			return nil, err
 		}
+		m.collectors = append(m.collectors, collector)
 	}
+	m.reg = reg
 	return m, nil
+}
+
+// Close unregisters the collectors. Front-ends that register into a shared
+// registry (e.g. Caddy's default) call it on teardown so a reload can
+// re-register cleanly.
+func (m *Metrics) Close() {
+	if m == nil || m.reg == nil {
+		return
+	}
+	for _, collector := range m.collectors {
+		m.reg.Unregister(collector)
+	}
+	m.collectors = nil
 }
 
 func (m *Metrics) ObserveInvocation(decision switchboard.Decision, err error, elapsed time.Duration) {
