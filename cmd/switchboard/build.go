@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -337,11 +338,15 @@ func inspectRulePackage(source string) (sourcePackage, error) {
 func packageImportPath(absDir string) (string, string, error) {
 	cmd := exec.Command("go", "list", "-f", "{{.ImportPath}}\n{{.Module.Dir}}", ".")
 	cmd.Dir = absDir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", "", fmt.Errorf("go list failed for %s: %w: %s", absDir, err, strings.TrimSpace(string(out)))
+	// Parse stdout only: on a cold module cache, go writes "go: downloading …"
+	// progress to stderr, which must not contaminate the two expected lines.
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", "", fmt.Errorf("go list failed for %s: %w: %s", absDir, err, strings.TrimSpace(stderr.String()))
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
 	if len(lines) != 2 || lines[0] == "" || lines[1] == "" {
 		return "", "", fmt.Errorf("go list did not return module information for %s", absDir)
 	}
