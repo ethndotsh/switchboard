@@ -18,6 +18,10 @@ import (
 // the CLI does: content-addressed ID from the descriptor identity zone,
 // manifest version set to the bundle ID after hashing.
 func makeTestBundle(t *testing.T, name string, module, tests []byte) bundle.Bundle {
+	return makeTestBundleWithData(t, name, module, tests, nil)
+}
+
+func makeTestBundleWithData(t *testing.T, name string, module, tests []byte, data map[string][]byte) bundle.Bundle {
 	t.Helper()
 	identity := bundle.ManifestIdentity{
 		Name:       name,
@@ -28,6 +32,9 @@ func makeTestBundle(t *testing.T, name string, module, tests []byte) bundle.Bund
 	artifacts := map[string][]byte{bundle.ArtifactModule: module}
 	if len(tests) > 0 {
 		artifacts[bundle.ArtifactTests] = tests
+	}
+	for dataName, value := range data {
+		artifacts[dataName] = value
 	}
 	descriptor := bundle.NewDescriptor(identity, artifacts)
 	id, err := descriptor.BundleID()
@@ -50,6 +57,7 @@ func makeTestBundle(t *testing.T, name string, module, tests []byte) bundle.Bund
 		},
 		Checksum:      bundle.ModuleChecksum(module),
 		Tests:         tests,
+		Data:          data,
 		Descriptor:    descriptor,
 		DescriptorRaw: descriptorRaw,
 	}
@@ -109,6 +117,39 @@ func TestFileBundleRoundTrip(t *testing.T) {
 	}
 	if _, err := reg.GetBundle(ctx, Scope{}, b.ID); !errors.Is(err, bundle.ErrInvalid) {
 		t.Fatalf("GetBundle after tamper = %v, want bundle.ErrInvalid", err)
+	}
+}
+
+func TestFileBundleDataRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	reg, root := newFileRegistry(t)
+	module := []byte("\x00asm-module-bytes")
+	data := map[string][]byte{
+		"data/allowlist.txt": []byte("203.0.113.7\n192.0.2.10\n"),
+		"data/flags.json":    []byte(`{"beta":"on"}`),
+	}
+	b := makeTestBundleWithData(t, "gate", module, nil, data)
+
+	if err := reg.PutBundle(ctx, Scope{}, b); err != nil {
+		t.Fatalf("PutBundle: %v", err)
+	}
+	got, err := reg.GetBundle(ctx, Scope{}, b.ID)
+	if err != nil {
+		t.Fatalf("GetBundle: %v", err)
+	}
+	for name, want := range data {
+		if !bytes.Equal(got.Data[name], want) {
+			t.Errorf("data %s = %q, want %q", name, got.Data[name], want)
+		}
+	}
+
+	// Tampering with a data file must fail descriptor verification.
+	dataPath := filepath.Join(root, "bundles", b.ID, "data", "allowlist.txt")
+	if err := os.WriteFile(dataPath, []byte("10.0.0.1\n"), 0o644); err != nil {
+		t.Fatalf("tamper data: %v", err)
+	}
+	if _, err := reg.GetBundle(ctx, Scope{}, b.ID); !errors.Is(err, bundle.ErrInvalid) {
+		t.Fatalf("GetBundle after data tamper = %v, want bundle.ErrInvalid", err)
 	}
 }
 

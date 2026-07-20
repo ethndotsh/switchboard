@@ -41,7 +41,8 @@ func TestBundleIDGoldenValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const golden = "sha256-90f7b93c172c415669c2ff6d6efc5f3f52bde33e3b4a3a87cf6736d0a709731f"
+	// Locked to ABI switchboard/v4; the v3→v4 bump deliberately re-derives it.
+	const golden = "sha256-c88790f29c3bcbf35d493e4af73796b1feac2851efa95f95c5ac1b756d34a68e"
 	if id != golden {
 		t.Fatalf("bundle id = %s, want %s (hashing contract changed!)", id, golden)
 	}

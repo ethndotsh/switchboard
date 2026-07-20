@@ -76,6 +76,12 @@ func requestCookieLen(namePtr uint32, nameLen uint32) uint32
 //go:wasmimport switchboard read_request_cookie
 func readRequestCookie(namePtr uint32, nameLen uint32, valuePtr uint32)
 
+//go:wasmimport switchboard data_read_len
+func dataReadLen(namePtr uint32, nameLen uint32) uint32
+
+//go:wasmimport switchboard read_data
+func readData(namePtr uint32, nameLen uint32, valuePtr uint32)
+
 //go:wasmimport switchboard action_next
 func actionNext()
 
@@ -206,6 +212,17 @@ func requestCookie(name string) string {
 	buf := make([]byte, length)
 	readRequestCookie(namePtr, nameLen, uint32(uintptr(unsafe.Pointer(&buf[0]))))
 	return string(buf)
+}
+
+func dataRead(name string) []byte {
+	namePtr, nameLen := stringPtr(name)
+	length := dataReadLen(namePtr, nameLen)
+	if length == 0 {
+		return nil
+	}
+	buf := make([]byte, length)
+	readData(namePtr, nameLen, uint32(uintptr(unsafe.Pointer(&buf[0]))))
+	return buf
 }
 
 func actionRedirect(status int, location string) {

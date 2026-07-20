@@ -405,17 +405,17 @@ func TestParseByteSize(t *testing.T) {
 		" 8MB ":   8 << 20,
 	}
 	for input, want := range cases {
-		got, err := parseByteSize(input)
+		got, err := ParseByteSize(input)
 		if err != nil {
-			t.Fatalf("parseByteSize(%q): %v", input, err)
+			t.Fatalf("ParseByteSize(%q): %v", input, err)
 		}
 		if got != want {
-			t.Fatalf("parseByteSize(%q) = %d, want %d", input, got, want)
+			t.Fatalf("ParseByteSize(%q) = %d, want %d", input, got, want)
 		}
 	}
 	for _, invalid := range []string{"", "-1mb", "0", "lots", "1.5mb"} {
-		if _, err := parseByteSize(invalid); err == nil {
-			t.Fatalf("parseByteSize(%q) should fail", invalid)
+		if _, err := ParseByteSize(invalid); err == nil {
+			t.Fatalf("ParseByteSize(%q) should fail", invalid)
 		}
 	}
 	if pages := bytesToWasmPages(32 << 20); pages != 512 {

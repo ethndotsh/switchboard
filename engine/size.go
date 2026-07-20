@@ -8,9 +8,9 @@ import (
 
 const wasmPageSize = 64 << 10
 
-// parseByteSize parses sizes like "32mb", "64kb", or plain bytes; kb/mb/gb
+// ParseByteSize parses sizes like "32mb", "64kb", or plain bytes; kb/mb/gb
 // and kib/mib/gib suffixes all mean powers of two.
-func parseByteSize(s string) (int64, error) {
+func ParseByteSize(s string) (int64, error) {
 	trimmed := strings.ToLower(strings.TrimSpace(s))
 	if trimmed == "" {
 		return 0, fmt.Errorf("empty size")

@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const ABIVersion = "switchboard/v3"
+const ABIVersion = "switchboard/v4"
 
 // ErrInvalid marks a bundle that can never activate as-is; the reconciler
 // quarantines it instead of retrying.
@@ -60,6 +60,9 @@ type Bundle struct {
 	Tests         []byte
 	Descriptor    Descriptor
 	DescriptorRaw []byte
+	// Data holds read-only bundled data files keyed by their descriptor
+	// artifact name (e.g. "data/allowlist.txt").
+	Data map[string][]byte
 }
 
 func ParseManifest(data []byte) (Manifest, error) {

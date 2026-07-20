@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	caddyserver "github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
@@ -11,6 +12,7 @@ import (
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	httpadapter "github.com/ethndotsh/switchboard/adapters/http"
 	"github.com/ethndotsh/switchboard/engine"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
@@ -38,16 +40,22 @@ type Switchboard struct {
 	MaxActionBytes     string `json:"max_action_bytes,omitempty"`
 	MaxHeaderOps       int    `json:"max_header_ops,omitempty"`
 	MaxResponseBody    string `json:"max_response_body,omitempty"`
+	MaxDataBytes       string `json:"max_data_bytes,omitempty"`
 	CacheDir           string `json:"cache_dir,omitempty"`
 	BootstrapFromCache string `json:"bootstrap_from_cache,omitempty"`
 	PoolAutoscale      string `json:"pool_autoscale,omitempty"`
 	PoolSize           int    `json:"pool_size,omitempty"`
 	MinPoolSize        int    `json:"min_pool_size,omitempty"`
 	MaxPoolSize        int    `json:"max_pool_size,omitempty"`
+	// StatusPath, when set, serves the switchboard status JSON at that request
+	// path instead of proxying the request downstream.
+	StatusPath string `json:"status_path,omitempty"`
 
-	service *engine.Service
-	manager *engine.RuntimeManager
-	logger  *zap.Logger
+	service       *engine.Service
+	manager       *engine.RuntimeManager
+	logger        *zap.Logger
+	metrics       *httpadapter.Metrics
+	statusHandler http.Handler
 }
 
 func (Switchboard) CaddyModule() caddyserver.ModuleInfo {
@@ -72,6 +80,7 @@ func (s *Switchboard) Provision(ctx caddyserver.Context) error {
 		MaxActionBytes:     s.MaxActionBytes,
 		MaxHeaderOps:       s.MaxHeaderOps,
 		MaxResponseBody:    s.MaxResponseBody,
+		MaxDataBytes:       s.MaxDataBytes,
 		CacheDir:           s.CacheDir,
 		BootstrapFromCache: s.BootstrapFromCache,
 		PoolAutoscale:      s.PoolAutoscale,
@@ -83,10 +92,21 @@ func (s *Switchboard) Provision(ctx caddyserver.Context) error {
 		return err
 	}
 	s.service = service
+	// Register switchboard_* metrics on Caddy's default registry (which backs
+	// the admin /metrics endpoint) so the Caddy path reports the same metrics
+	// as standalone serve.
+	metrics, err := httpadapter.NewMetrics(prometheus.DefaultRegisterer, service)
+	if err != nil {
+		s.logger.Warn("switchboard metrics registration failed", zap.Error(err))
+	} else {
+		s.metrics = metrics
+	}
+	s.statusHandler = httpadapter.StatusHandler(service)
 	return nil
 }
 
 func (s *Switchboard) Cleanup() error {
+	s.metrics.Close()
 	if s.service != nil {
 		return s.service.Close(context.Background())
 	}
@@ -94,6 +114,11 @@ func (s *Switchboard) Cleanup() error {
 }
 
 func (s *Switchboard) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+	if s.StatusPath != "" && r.URL.Path == s.StatusPath && s.statusHandler != nil {
+		s.statusHandler.ServeHTTP(w, r)
+		return nil
+	}
+
 	req := httpadapter.RequestFromHTTP(r)
 	// Prefer Caddy's client IP, which honors trusted_proxies.
 	if clientIP, ok := caddyhttp.GetVar(r.Context(), caddyhttp.ClientIPVarKey).(string); ok && clientIP != "" {
@@ -102,6 +127,7 @@ func (s *Switchboard) ServeHTTP(w http.ResponseWriter, r *http.Request, next cad
 
 	var result engine.InvokeResult
 	var err error
+	start := time.Now()
 	if s.service != nil {
 		result, err = s.service.InvokeWithFallback(r.Context(), req)
 	} else {
@@ -113,6 +139,7 @@ func (s *Switchboard) ServeHTTP(w http.ResponseWriter, r *http.Request, next cad
 			result.Action, err = current.Invoke(r.Context(), req)
 		}
 	}
+	s.metrics.ObserveInvocation(result.Action.Decision, err, time.Since(start))
 	if err != nil {
 		if s.logger != nil {
 			s.logger.Warn("switchboard rule invocation failed", zap.String("bundle_id", result.BundleID), zap.Error(err))
@@ -257,6 +284,10 @@ func (s *Switchboard) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				err = positiveIntArg(&s.MaxHeaderOps, "max_header_ops")
 			case "max_response_body":
 				err = stringArg(&s.MaxResponseBody)
+			case "max_data_bytes":
+				err = stringArg(&s.MaxDataBytes)
+			case "status_path":
+				err = stringArg(&s.StatusPath)
 			case "cache_dir":
 				err = stringArg(&s.CacheDir)
 			case "bootstrap_from_cache":

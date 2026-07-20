@@ -23,10 +23,16 @@ type InvokeLimits struct {
 	MaxActionBytes  int
 	MaxHeaderOps    int
 	MaxResponseBody int
+	// MaxDataBytes bounds the total size of a bundle's data artifacts. It is
+	// an activation-time gate, not a per-invocation limit.
+	MaxDataBytes int
 }
 
 type WasmRuntime interface {
-	Compile(ctx context.Context, module []byte) (CompiledRule, error)
+	// Compile builds a rule from its module bytes. data holds read-only
+	// bundled data files (keyed by artifact name) exposed to the guest at
+	// invocation time; it is immutable for the life of the compiled rule.
+	Compile(ctx context.Context, module []byte, data map[string][]byte) (CompiledRule, error)
 	Close(ctx context.Context) error
 }
 

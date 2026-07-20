@@ -20,18 +20,21 @@ type Runtime struct {
 type CompiledRule struct {
 	runtime wazeroapi.Runtime
 	module  wazeroapi.CompiledModule
+	data    map[string][]byte
 }
 
 type Instance struct {
 	module     api.Module
 	handleName string
 	handle     api.Function
+	data       map[string][]byte
 }
 
 type invocationState struct {
 	request     switchboard.Request
 	action      switchboard.Action
 	limits      wasmapi.InvokeLimits
+	data        map[string][]byte
 	queryOnce   bool
 	queryValues url.Values
 	actionBytes int
@@ -67,12 +70,12 @@ func NewRuntime(ctx context.Context, opts wasmapi.RuntimeOptions) (wasmapi.WasmR
 	return &Runtime{runtime: wasmRuntime, cache: cache}, nil
 }
 
-func (r *Runtime) Compile(ctx context.Context, module []byte) (wasmapi.CompiledRule, error) {
+func (r *Runtime) Compile(ctx context.Context, module []byte, data map[string][]byte) (wasmapi.CompiledRule, error) {
 	compiled, err := r.runtime.CompileModule(ctx, module)
 	if err != nil {
 		return nil, err
 	}
-	return &CompiledRule{runtime: r.runtime, module: compiled}, nil
+	return &CompiledRule{runtime: r.runtime, module: compiled, data: data}, nil
 }
 
 func (r *Runtime) Close(ctx context.Context) error {
@@ -93,7 +96,7 @@ func (r *CompiledRule) Instantiate(ctx context.Context) (wasmapi.RuleInstance, e
 	if err != nil {
 		return nil, err
 	}
-	return &Instance{module: mod}, nil
+	return &Instance{module: mod, data: r.data}, nil
 }
 
 func (r *CompiledRule) Close(ctx context.Context) error {
@@ -121,6 +124,7 @@ func (i *Instance) Invoke(ctx context.Context, entrypoint string, req switchboar
 		request: req,
 		action:  switchboard.Action{Decision: switchboard.DecisionNext},
 		limits:  limits,
+		data:    i.data,
 	}
 	ctx = context.WithValue(ctx, invocationStateKey{}, state)
 	results, err := i.handle.Call(ctx)

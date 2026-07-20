@@ -1,0 +1,26 @@
+schema: switchboard.tests/v1
+cases:
+  - name: normal request passes with banner header
+    request:
+      path: /
+    expect:
+      action: next
+      reason: ok
+      response_headers:
+        x-banner: beta program open
+
+  - name: blocked path is denied
+    request:
+      path: /admin
+    expect:
+      action: deny
+      status: 403
+      reason: blocked-path
+
+  - name: another blocked path is denied
+    request:
+      path: /internal
+    expect:
+      action: deny
+      status: 403
+      reason: blocked-path

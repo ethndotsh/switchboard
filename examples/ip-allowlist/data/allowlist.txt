@@ -1,0 +1,5 @@
+# Allowlisted client IPs, one per line. Blank lines and lines beginning with
+# '#' are ignored. Edit and rebuild to change the policy.
+203.0.113.7
+198.51.100.22
+192.0.2.10

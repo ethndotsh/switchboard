@@ -42,7 +42,7 @@ func TestParseChannelPointer(t *testing.T) {
 }
 
 func TestParseManifestRequiresABIV3(t *testing.T) {
-	if _, err := ParseManifest([]byte(`{"name":"rules","version":"v3","abi_version":"switchboard/v3","entrypoint":"handle"}`)); err != nil {
+	if _, err := ParseManifest([]byte(`{"name":"rules","version":"v3","abi_version":"switchboard/v4","entrypoint":"handle"}`)); err != nil {
 		t.Fatalf("parse v3 manifest: %v", err)
 	}
 	for _, old := range []string{"switchboard/v0", "switchboard/v1", "switchboard/v2"} {

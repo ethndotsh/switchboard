@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/ethndotsh/switchboard/internal/bundle"
@@ -55,9 +56,30 @@ func revisionFileName(generation uint64) string {
 	return fmt.Sprintf("%010d.json", generation)
 }
 
-// BundleFileNames are the objects under bundles/{id}/, in upload order;
-// descriptor.json goes last so its presence marks a complete bundle.
+// BundleFileNames are the fixed objects under bundles/{id}/, in upload order;
+// descriptor.json goes last so its presence marks a complete bundle. Data
+// artifacts are named dynamically, so use bundleWriteOrder for the full set.
 var BundleFileNames = []string{"module.wasm", "manifest.json", "tests.yaml", "checksum.txt", "descriptor.json"}
+
+// bundleWriteOrder returns every file name in files ordered so descriptor.json
+// is written last, marking the bundle complete only once every other object
+// (including data artifacts) is durably in place.
+func bundleWriteOrder(files map[string][]byte) []string {
+	names := make([]string, 0, len(files))
+	hasDescriptor := false
+	for name := range files {
+		if name == "descriptor.json" {
+			hasDescriptor = true
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	if hasDescriptor {
+		names = append(names, "descriptor.json")
+	}
+	return names
+}
 
 type fetchFunc func(name string) ([]byte, bool, error)
 
@@ -116,14 +138,26 @@ func assembleBundle(id string, fetch fetchFunc) (bundle.Bundle, error) {
 		return bundle.Bundle{}, err
 	}
 	files := map[string][]byte{bundle.ArtifactModule: module}
-	if _, declared := descriptor.Artifacts[bundle.ArtifactTests]; declared {
-		tests, ok, err := fetch("tests.yaml")
+	for name := range descriptor.Artifacts {
+		if name == bundle.ArtifactModule {
+			continue
+		}
+		data, ok, err := fetch(name)
 		if err != nil {
 			return bundle.Bundle{}, err
 		}
-		if ok {
-			files[bundle.ArtifactTests] = tests
-			b.Tests = tests
+		if !ok {
+			continue
+		}
+		files[name] = data
+		switch {
+		case name == bundle.ArtifactTests:
+			b.Tests = data
+		case bundle.IsDataArtifact(name):
+			if b.Data == nil {
+				b.Data = map[string][]byte{}
+			}
+			b.Data[name] = data
 		}
 	}
 	if err := descriptor.Verify(files); err != nil {

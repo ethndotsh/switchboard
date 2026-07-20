@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,7 @@ const (
 	DefaultMaxActionBytes  = 64 << 10
 	DefaultMaxHeaderOps    = 32
 	DefaultMaxResponseBody = 8 << 10
+	DefaultMaxDataBytes    = 4 << 20
 )
 
 const (
@@ -169,7 +171,10 @@ func NewRuntimeWithPoolConfig(ctx context.Context, wasmRuntime WasmRuntime, b bu
 	if maxPoolSize < minPoolSize {
 		maxPoolSize = minPoolSize
 	}
-	compiled, err := wasmRuntime.Compile(ctx, b.Module)
+	if err := checkDataSize(b.Data, limits.MaxDataBytes); err != nil {
+		return nil, err
+	}
+	compiled, err := wasmRuntime.Compile(ctx, b.Module, b.Data)
 	if err != nil {
 		return nil, err
 	}
@@ -201,6 +206,23 @@ func NewRuntimeWithPoolConfig(ctx context.Context, wasmRuntime WasmRuntime, b bu
 	return runtime, nil
 }
 
+// checkDataSize rejects a bundle whose data artifacts exceed the configured
+// cap; returning an ErrInvalid keeps the reconciler quarantining it rather
+// than retrying.
+func checkDataSize(data map[string][]byte, limit int) error {
+	if limit <= 0 {
+		return nil
+	}
+	total := 0
+	for _, value := range data {
+		total += len(value)
+	}
+	if total > limit {
+		return fmt.Errorf("%w: bundle data %d bytes exceeds max_data_bytes %d", bundle.ErrInvalid, total, limit)
+	}
+	return nil
+}
+
 func resolveInvokeLimits(limits InvokeLimits) InvokeLimits {
 	if limits.Timeout <= 0 {
 		limits.Timeout = DefaultInvokeTimeout
@@ -213,6 +235,9 @@ func resolveInvokeLimits(limits InvokeLimits) InvokeLimits {
 	}
 	if limits.MaxResponseBody <= 0 {
 		limits.MaxResponseBody = DefaultMaxResponseBody
+	}
+	if limits.MaxDataBytes <= 0 {
+		limits.MaxDataBytes = DefaultMaxDataBytes
 	}
 	return limits
 }

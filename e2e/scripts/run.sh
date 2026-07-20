@@ -120,7 +120,7 @@ cat > /tmp/switchboard-dist-bad/manifest.json <<EOF
 {
   "name": "bad",
   "version": "bad-$(date +%s)",
-  "abi_version": "switchboard/v3",
+  "abi_version": "switchboard/v4",
   "entrypoint": "handle",
   "language": "go-tinygo"
 }

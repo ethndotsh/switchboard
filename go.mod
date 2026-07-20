@@ -3,6 +3,7 @@ module github.com/ethndotsh/switchboard
 go 1.23
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/caddyserver/caddy/v2 v2.8.4
 	github.com/minio/minio-go/v7 v7.0.80
 	github.com/prometheus/client_golang v1.19.1
